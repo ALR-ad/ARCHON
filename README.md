@@ -1,4 +1,4 @@
-# PR Reviewer Agent
+# ARCHON
 
 Detects duplicated logic and architectural-convention violations on GitHub PRs.
 See CONTRACTS.md for the interface both people build against.
