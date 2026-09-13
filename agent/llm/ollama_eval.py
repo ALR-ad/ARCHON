@@ -138,6 +138,7 @@ def evaluate_with_ollama(
                 "system": _SYSTEM_PROMPT,
                 "prompt": prompt,
                 "stream": False,
+                "format": "json",
                 "options": {
                     "temperature": 0.1,  # low temp for consistent JSON
                     "num_predict": 512,
@@ -151,6 +152,7 @@ def evaluate_with_ollama(
         return None
 
     raw_response = response.json().get("response", "")
+    print(f"\n--- RAW OLLAMA RESPONSE ---\n{raw_response}\n---------------------------\n")
     logger.debug("Raw Ollama response: %s", raw_response)
 
     try:
