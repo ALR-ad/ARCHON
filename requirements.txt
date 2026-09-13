@@ -1,0 +1,22 @@
+# Shared
+pydantic>=2.0
+python-dotenv
+pyyaml
+
+# Person A - indexing
+tree-sitter
+tree-sitter-languages
+lancedb
+ollama
+
+# Person B - agent
+fastapi
+uvicorn
+PyGithub
+requests
+
+# Orchestration
+strands-agents
+
+# Testing
+pytest
