@@ -1,7 +1,46 @@
-# ARCHON
+```
+ █████╗ ██████╗  ██████╗██╗  ██╗ ██████╗ ███╗   ██╗
+██╔══██╗██╔══██╗██╔════╝██║  ██║██╔═══██╗████╗  ██║
+███████║██████╔╝██║     ███████║██║   ██║██╔██╗ ██║
+██╔══██║██╔══██╗██║     ██╔══██║██║   ██║██║╚██╗██║
+██║  ██║██║  ██║╚██████╗██║  ██║╚██████╔╝██║ ╚████║
+╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═══╝
+                                            v0.3.0
+```
 
-Detects duplicated logic and architectural-convention violations on GitHub PRs.
-See CONTRACTS.md for the interface both people build against.
+# Archon — Tech Debt & Architectural PR Reviewer
+
+A GitHub bot that catches two specific things on pull requests: duplicated logic
+that already exists elsewhere in the codebase, and code that breaks documented
+architectural conventions. It reads a PR's diff, searches the codebase and
+internal wiki for similar existing code, evaluates the matches with a local
+LLM, and leaves one comment if it finds something worth flagging.
+
+It doesn't try to be a linter, a security scanner, or a general code reviewer.
+One job, done narrowly.
+
+## How it works
+
+```
+GitHub PR opened/updated
+        |
+        v
++---------------+   +--------------+   +--------------+   +--------------+
+| Node 1        |-->| Node 2       |-->| Node 3       |-->| Node 4       |
+| Ingest diff   |   | Semantic     |   | Evaluate     |   | Draft and    |
+|               |   | search       |   | (local LLM)  |   | post comment |
++---------------+   +--------------+   +--------------+   +--------------+
+                            ^
+                            | query
+                     +--------------+
+                     | Vector store |  <- indexed continuously from the
+                     | (code+wiki)  |     codebase and wiki, separate
+                     +--------------+     from the PR pipeline
+```
+
+The 4-node pipeline is a deterministic graph built with the Strands Agents SDK.
+Only Node 3 calls an LLM. Everything else is plain Python you can unit test
+without mocking a model.
 
 ## Structure and ownership
 
