@@ -140,7 +140,8 @@ def evaluate_with_ollama(
                 "stream": False,
                 "format": "json",
                 "options": {
-                    "temperature": 0.1,  # low temp for consistent JSON
+                    "temperature": 0.0,  # strict deterministic JSON
+                    "seed": 42,          # force deterministic random seed
                     "num_predict": 512,
                 },
             },

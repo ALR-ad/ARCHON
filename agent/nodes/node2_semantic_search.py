@@ -55,17 +55,35 @@ def semantic_search(
         List of (unit, filtered_candidates) tuples, only for units
         that have at least one candidate above the floor.
     """
+    import concurrent.futures
+
     results: List[Tuple[ChangedCodeUnit, List[Candidate]]] = []
 
-    for unit in units:
-        logger.info(
-            "Node 2: embedding %s::%s (%d chars)",
-            unit.file_path,
-            unit.symbol_name,
-            len(unit.code),
-        )
+    logger.info("Node 2: preparing to embed %d units", len(units))
+    
+    # 1. Generate embeddings concurrently to hide network/processing latency
+    embeddings: List[List[float]] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(units) or 1, 10)) as executor:
+        # submit tasks in order
+        future_to_index = {executor.submit(embed_fn, unit.code): i for i, unit in enumerate(units)}
+        
+        # We need embeddings in the same order as units. 
+        # So we allocate a list and fill it.
+        embeddings = [[]] * len(units)
+        for future in concurrent.futures.as_completed(future_to_index):
+            i = future_to_index[future]
+            try:
+                embeddings[i] = future.result()
+            except Exception as exc:
+                logger.error("Node 2: unit %d generated an exception: %s", i, exc)
+                embeddings[i] = [] # Fallback for failure
 
-        embedding = embed_fn(unit.code)
+    # 2. Query vector store sequentially (fast) and filter
+    for i, unit in enumerate(units):
+        embedding = embeddings[i]
+        if not embedding:
+            continue
+            
         raw_candidates = store.query(embedding)
 
         # Filter by similarity floor
