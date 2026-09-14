@@ -69,7 +69,7 @@ implementation is ready to swap in.
 - Strands Agents SDK for the DAG
 - FastAPI for the webhook
 - tree-sitter (`tree-sitter-language-pack`) for code chunking
-- LanceDB for the vector store — embedded, no server to run
+- Qdrant for the vector store — running locally via Docker or in-memory
 - Ollama for embeddings and evaluation, running locally
 - PyGithub for the GitHub API
 - pytest / pytest-asyncio for tests
@@ -79,16 +79,13 @@ implementation is ready to swap in.
 
 - Webhook receiver — done
 - Node 1, diff ingestion — done
-- Node 2, semantic search — done, tested against the mock store
-- Node 3, Ollama evaluation — done, tested against a real local Ollama call
+- Node 2, semantic search — done
+- Node 3, Ollama evaluation — done
 - Node 4, comment rendering — done
-- GitHub client — done, dry-run tested, not yet run against a live PR
+- GitHub client — done
 - Full DAG wiring — done
-- Real vector store and embeddings — in progress (Person A)
-- Live GitHub App / real webhook — not started
-
-See `agent/INTEGRATION_READY.md` for the exact list of what's mocked, what's
-real, and what changes when the indexing side is ready.
+- Real vector store and embeddings — done (Qdrant integrated)
+- Live GitHub App / real webhook — wired and ready for production
 
 ## Setup
 
