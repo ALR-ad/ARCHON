@@ -1,1 +1,101 @@
-"""PERSON B: wires Nodes 1-4 into a Strands DAG."""
+"""
+agent/dag.py
+
+Wires Nodes 1-4 into a Strands Agents SDK Graph.
+Uses a lightweight FunctionAgent adapter to wrap our deterministic
+functions into the AgentBase interface expected by the graph.
+"""
+
+from typing import Any, Callable, Dict, Optional
+
+from strands.agent.base import AgentBase
+from strands.agent.agent_result import AgentResult
+from strands.telemetry.metrics import EventLoopMetrics
+from strands.multiagent.graph import GraphBuilder, Graph
+
+# Import our node functions
+from agent.nodes.node1_ingest_diff import ingest_diff
+from agent.nodes.node2_semantic_search import semantic_search
+from agent.nodes.node3_evaluate import evaluate
+from agent.nodes.node4_comment import render_comment
+from agent.llm.mock_vectorstore import MockVectorStore
+
+
+class FunctionAgent(AgentBase):
+    """
+    Lightweight adapter to make a deterministic function act as a Strands node.
+    Reads from and writes to the graph's invocation_state dictionary.
+    """
+
+    def __init__(self, name: str, fn: Callable[[Dict[str, Any]], None]):
+        self.name = name
+        self.fn = fn
+
+    def __call__(self, prompt=None, **kwargs):
+        raise NotImplementedError("Use invoke_async/stream_async")
+
+    async def invoke_async(self, prompt=None, **kwargs):
+        raise NotImplementedError("Graph uses stream_async internally")
+
+    async def stream_async(self, prompt=None, **kwargs):
+        state = kwargs.get("invocation_state", {})
+        
+        # Execute the underlying deterministic function, mutating the state
+        self.fn(state)
+        
+        # Yield the required Strands event format
+        res = AgentResult(
+            message={"role": "assistant", "content": []},
+            metrics=EventLoopMetrics(),
+            stop_reason="end_turn",
+            state=state,
+        )
+        yield {"result": res}
+
+
+# -- Node Wrapper Functions --------------------------------------------------
+
+def _run_node1(state: Dict[str, Any]) -> None:
+    payload = state.get("payload", {})
+    state["units"] = ingest_diff(payload)
+
+
+def _run_node2(state: Dict[str, Any]) -> None:
+    units = state.get("units", [])
+    # For now, use the mock vector store as instructed
+    store = MockVectorStore()
+    state["matches"] = semantic_search(units, store)
+
+
+def _run_node3(state: Dict[str, Any]) -> None:
+    matches = state.get("matches", [])
+    state["findings"] = evaluate(matches)
+
+
+def _run_node4(state: Dict[str, Any]) -> None:
+    findings = state.get("findings", [])
+    state["comment"] = render_comment(findings)
+
+
+# -- DAG Builder -------------------------------------------------------------
+
+def build_dag() -> Graph:
+    """
+    Constructs the 4-node sequential DAG using Strands GraphBuilder.
+    """
+    builder = GraphBuilder()
+
+    # Add nodes
+    builder.add_node(FunctionAgent("node1", _run_node1), "node1")
+    builder.add_node(FunctionAgent("node2", _run_node2), "node2")
+    builder.add_node(FunctionAgent("node3", _run_node3), "node3")
+    builder.add_node(FunctionAgent("node4", _run_node4), "node4")
+
+    # Wire them sequentially
+    builder.add_edge("node1", "node2")
+    builder.add_edge("node2", "node3")
+    builder.add_edge("node3", "node4")
+
+    builder.set_entry_point("node1")
+
+    return builder.build()

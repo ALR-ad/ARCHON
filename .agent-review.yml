@@ -1,0 +1,9 @@
+similarity_floor: 0.78
+confidence_threshold: 0.75
+ignore_paths:
+  - "**/node_modules/**"
+  - "**/*.lock"
+  - "**/dist/**"
+enabled_checks:
+  duplication: true
+  architectural_violation: true

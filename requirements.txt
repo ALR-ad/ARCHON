@@ -20,3 +20,5 @@ strands-agents
 
 # Testing
 pytest
+
+pytest-asyncio
