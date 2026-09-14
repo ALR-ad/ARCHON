@@ -31,6 +31,10 @@ agent_graph = None
 
 app = FastAPI()
 
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
+
 @app.on_event("startup")
 async def startup_event():
     global vector_store, agent_graph
@@ -59,11 +63,10 @@ async def receive_webhook(request: Request):
     logger.info("Processing PR #%s for %s", meta["pr_number"], meta["repo_full_name"])
 
     # Execute the DAG asynchronously
-    final_state = None
+    final_state = {"payload": payload}
     try:
-        async for chunk in agent_graph.stream_async(invocation_state={"payload": payload}):
-            if "result" in chunk:
-                final_state = chunk["result"].state
+        async for chunk in agent_graph.stream_async(task="evaluate", invocation_state=final_state):
+            pass
     except Exception as e:
         logger.error("DAG execution failed: %s", e, exc_info=True)
         return {"status": "error", "message": "Pipeline failed"}

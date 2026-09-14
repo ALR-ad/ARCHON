@@ -40,10 +40,11 @@ class FunctionAgent(AgentBase):
         raise NotImplementedError("Graph uses stream_async internally")
 
     async def stream_async(self, prompt=None, **kwargs):
+        import asyncio
         state = kwargs.get("invocation_state", {})
         
-        # Execute the underlying deterministic function, mutating the state
-        self.fn(state)
+        # Execute the underlying deterministic function in a thread to prevent blocking Uvicorn's event loop
+        await asyncio.to_thread(self.fn, state)
         
         # Yield the required Strands event format
         res = AgentResult(
