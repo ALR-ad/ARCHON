@@ -14,7 +14,7 @@ import logging
 import os
 from pathlib import Path
 import subprocess
-from typing import Callable, Dict, List, Optional, Set, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple, Any
 
 from indexing.chunking.code_chunker import chunk_code
 from indexing.chunking.wiki_chunker import chunk_wiki
