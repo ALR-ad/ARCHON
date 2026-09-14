@@ -32,7 +32,8 @@ def embed_text(text: str) -> List[float]:
         List[float] -- embedding vector, fixed dimension (see
         shared/config.py: EMBEDDING_DIM). Same dimension every call.
     """
-    raise NotImplementedError("Implemented in indexing/embeddings/embedder.py")
+    from indexing.embeddings.embedder import embed_text as _impl
+    return _impl(text)
 
 
 class VectorStore(ABC):

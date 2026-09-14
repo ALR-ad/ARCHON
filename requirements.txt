@@ -5,8 +5,8 @@ pyyaml
 
 # Person A - indexing
 tree-sitter
-tree-sitter-languages
-lancedb
+tree-sitter-language-pack
+qdrant-client
 ollama
 
 # Person B - agent
