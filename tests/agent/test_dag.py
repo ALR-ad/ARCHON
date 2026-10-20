@@ -57,9 +57,15 @@ async def test_dag_execution(fake_payload):
             
             mock_evaluate.side_effect = fake_eval
             
-            # Execute the graph
-            initial_state = {"payload": fake_payload}
-            result = await graph.invoke_async("start", invocation_state=initial_state)
+            with patch("agent.github_client.get_pr_files") as mock_pr_files:
+                with patch("agent.github_client.get_file_content") as mock_file_content:
+                    from tests.agent.test_node1_ingest_diff import mock_get_pr_files, mock_get_file_content
+                    mock_pr_files.side_effect = mock_get_pr_files
+                    mock_file_content.side_effect = mock_get_file_content
+                    
+                    # Execute the graph
+                    initial_state = {"payload": fake_payload}
+                    result = await graph.invoke_async("start", invocation_state=initial_state)
 
             # Check that the final state contains all expected artifacts
             final_state = result.results["node4"].result.state

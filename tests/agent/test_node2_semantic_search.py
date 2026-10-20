@@ -155,3 +155,41 @@ def test_custom_similarity_floor():
     # With floor=0.50, it should pass.
     results = semantic_search([unit], MockVectorStore(), similarity_floor=0.50)
     assert len(results) == 1
+
+# -- Tests: rename filtering --------------------------------------------------
+
+class CustomStore(VectorStore):
+    def __init__(self, candidates):
+        self.candidates = candidates
+    def query(self, embedding, top_k=8, filters=None):
+        return self.candidates
+    def get_index_status(self):
+        return {}
+
+def test_same_file_same_symbol_high_similarity_excluded():
+    unit = _make_unit(symbol='testFn')
+    c = Candidate(chunk_id='1', file_path='src/test.ts', symbol_name='testFn', code_snippet='', source_type='code', similarity=0.99)
+    results = semantic_search([unit], CustomStore([c]))
+    assert len(results) == 0
+
+def test_same_file_different_symbol_similarity_above_threshold_excluded():
+    from shared.config import RENAME_SIMILARITY_THRESHOLD
+    unit = _make_unit(symbol='newFn')
+    c = Candidate(chunk_id='1', file_path='src/test.ts', symbol_name='oldFn', code_snippet='', source_type='code', similarity=RENAME_SIMILARITY_THRESHOLD + 0.01)
+    results = semantic_search([unit], CustomStore([c]))
+    assert len(results) == 0
+
+def test_same_file_different_symbol_similarity_below_threshold_included():
+    from shared.config import RENAME_SIMILARITY_THRESHOLD
+    unit = _make_unit(symbol='newFn')
+    c = Candidate(chunk_id='1', file_path='src/test.ts', symbol_name='otherFn', code_snippet='', source_type='code', similarity=RENAME_SIMILARITY_THRESHOLD - 0.05)
+    results = semantic_search([unit], CustomStore([c]))
+    assert len(results) == 1
+
+def test_different_file_same_symbol_high_similarity_included():
+    from shared.config import RENAME_SIMILARITY_THRESHOLD
+    unit = _make_unit(symbol='testFn')
+    c = Candidate(chunk_id='1', file_path='src/other.ts', symbol_name='testFn', code_snippet='', source_type='code', similarity=0.99)
+    results = semantic_search([unit], CustomStore([c]))
+    assert len(results) == 1
+
