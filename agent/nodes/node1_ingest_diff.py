@@ -56,54 +56,59 @@ def _extract_pr_metadata(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-# ---------------------------------------------------------------------------
-# Fake diff data for development -- will be replaced by real GitHub API call
-# ---------------------------------------------------------------------------
-_FAKE_DIFF_UNITS = [
-    {
-        "file_path": "src/orders/parseOrderDate.ts",
-        "symbol_name": "parseOrderDate",
-        "language": "typescript",
-        "start_line": 12,
-        "end_line": 28,
-        "code": (
-            "export function parseOrderDate(raw: string): Date {\n"
-            "  const parts = raw.split('-');\n"
-            "  const year = parseInt(parts[0], 10);\n"
-            "  const month = parseInt(parts[1], 10) - 1;\n"
-            "  const day = parseInt(parts[2], 10);\n"
-            "  return new Date(year, month, day);\n"
-            "}"
-        ),
-        "diff_type": "added",
-    },
-    {
-        "file_path": "src/orders/validateOrder.ts",
-        "symbol_name": "validateOrderPayload",
-        "language": "typescript",
-        "start_line": 5,
-        "end_line": 22,
-        "code": (
-            "export function validateOrderPayload(order: Order): boolean {\n"
-            "  if (!order.id || typeof order.id !== 'string') return false;\n"
-            "  if (!order.items || order.items.length === 0) return false;\n"
-            "  if (order.total <= 0) return false;\n"
-            "  return true;\n"
-            "}"
-        ),
-        "diff_type": "modified",
-    },
-]
+import os
+import re
+from agent.github_client import get_pr_files, get_file_content
+from indexing.chunking.code_chunker import chunk_code
 
 
-def ingest_diff(payload: Dict[str, Any]) -> List[ChangedCodeUnit]:
+def extract_modified_lines(patch: str) -> set[int]:
+    """Parse unified diff to find added or modified line numbers."""
+    modified_lines = set()
+    if not patch:
+        return modified_lines
+
+    current_line = -1
+    for line in patch.splitlines():
+        if line.startswith("@@"):
+            m = re.search(r"\+([0-9]+)", line)
+            if m:
+                current_line = int(m.group(1))
+        elif line.startswith("+") and not line.startswith("+++"):
+            if current_line != -1:
+                modified_lines.add(current_line)
+                current_line += 1
+        elif line.startswith("-") and not line.startswith("---"):
+            pass
+        elif line.startswith(" ") or line == "":
+            if current_line != -1:
+                current_line += 1
+    return modified_lines
+
+
+def guess_language(filename: str) -> str:
+    ext = os.path.splitext(filename)[1].lower()
+    return ext[1:] if ext else "plaintext"
+
+
+def ingest_diff(
+    payload: Dict[str, Any],
+    get_pr_files_fn=None,
+    get_file_content_fn=None
+) -> List[ChangedCodeUnit]:
     """
     Node 1 entry point.
 
     Takes a raw GitHub webhook payload (pull_request event), extracts
-    metadata, fetches the diff (currently faked), and returns structured
-    ChangedCodeUnit objects.
+    metadata, fetches the real diff and file contents from GitHub,
+    chunks the AST, and filters the chunks to those that were modified.
     """
+    if get_pr_files_fn is None:
+        from agent.github_client import get_pr_files
+        get_pr_files_fn = get_pr_files
+    if get_file_content_fn is None:
+        from agent.github_client import get_file_content
+        get_file_content_fn = get_file_content
     meta = _extract_pr_metadata(payload)
     logger.info(
         "Node 1: ingesting PR #%s on %s (head=%s, base=%s)",
@@ -113,20 +118,47 @@ def ingest_diff(payload: Dict[str, Any]) -> List[ChangedCodeUnit]:
         meta["base_sha"][:8],
     )
 
-    # TODO: replace with real diff fetching via agent.github_client
     units: List[ChangedCodeUnit] = []
-    for raw in _FAKE_DIFF_UNITS:
-        unit = ChangedCodeUnit(
-            unit_id=_make_unit_id(raw["file_path"], raw["symbol_name"], meta["head_sha"]),
-            file_path=raw["file_path"],
-            symbol_name=raw["symbol_name"],
-            language=raw["language"],
-            start_line=raw["start_line"],
-            end_line=raw["end_line"],
-            code=raw["code"],
-            diff_type=raw["diff_type"],
-        )
-        units.append(unit)
+    
+    try:
+        files = get_pr_files_fn(meta["repo_full_name"], meta["pr_number"])
+    except Exception as e:
+        logger.error("Failed to fetch PR files from GitHub: %s", e)
+        return units
+
+    for f in files:
+        if f.status == "removed" or not f.patch:
+            continue
+            
+        modified_lines = extract_modified_lines(f.patch)
+        if not modified_lines:
+            continue
+            
+        try:
+            raw_content = get_file_content_fn(meta["repo_full_name"], f.filename, meta["head_sha"])
+        except Exception as e:
+            logger.warning("Failed to fetch content for %s: %s", f.filename, e)
+            continue
+            
+        lang = guess_language(f.filename)
+        
+        try:
+            chunks = chunk_code(
+                file_path=f.filename,
+                code=raw_content,
+                language=lang,
+                commit_sha=meta["head_sha"],
+                diff_type="added" if f.status == "added" else "modified"
+            )
+        except Exception as e:
+            logger.warning("Failed to chunk %s: %s", f.filename, e)
+            continue
+            
+        # Keep chunks that overlap with modified lines
+        for chunk in chunks:
+            chunk_range = set(range(chunk.start_line, chunk.end_line + 1))
+            if chunk_range.intersection(modified_lines):
+                units.append(chunk)
 
     logger.info("Node 1: produced %d ChangedCodeUnit(s)", len(units))
     return units

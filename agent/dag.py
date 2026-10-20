@@ -14,7 +14,7 @@ from strands.agent.agent_result import AgentResult
 from strands.telemetry.metrics import EventLoopMetrics
 from strands.multiagent.graph import GraphBuilder, Graph
 
-# Import our node functions
+# Import the functions
 from agent.nodes.node1_ingest_diff import ingest_diff
 from agent.nodes.node2_semantic_search import semantic_search
 from agent.nodes.node3_evaluate import evaluate
@@ -56,7 +56,7 @@ class FunctionAgent(AgentBase):
         yield {"result": res}
 
 
-# -- Node Wrapper Functions --------------------------------------------------
+# Node Wrappers for functions
 
 def _run_node1(state: Dict[str, Any]) -> None:
     payload = state.get("payload", {})
@@ -84,7 +84,7 @@ def _run_node4(state: Dict[str, Any]) -> None:
     state["comment"] = render_comment(findings)
 
 
-# -- DAG Builder -------------------------------------------------------------
+# our DAG Builder 
 
 def build_dag(
     store: Optional[VectorStore] = None,
@@ -110,7 +110,7 @@ def build_dag(
     builder.add_node(FunctionAgent("node3", node3_bound), "node3")
     builder.add_node(FunctionAgent("node4", _run_node4), "node4")
 
-    # Wire them sequentially
+    # Wiring them sequentially
     builder.add_edge("node1", "node2")
     builder.add_edge("node2", "node3")
     builder.add_edge("node3", "node4")

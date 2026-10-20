@@ -10,6 +10,7 @@ Verifies:
 """
 
 import pytest
+from unittest.mock import MagicMock
 
 from agent.nodes.node1_ingest_diff import (
     ingest_diff,
@@ -36,6 +37,25 @@ FAKE_WEBHOOK_PAYLOAD = {
     },
 }
 
+def mock_get_pr_files(repo_full_name, pr_number):
+    file1 = MagicMock()
+    file1.status = "added"
+    file1.filename = "src/parse.py"
+    file1.patch = "@@ -1,0 +1,3 @@\n+def parse_date(raw: str):\n+    return None\n+"
+    
+    file2 = MagicMock()
+    file2.status = "modified"
+    file2.filename = "src/validate.py"
+    file2.patch = "@@ -5,2 +5,2 @@\n def validate_order(order):\n-    return False\n+    return True\n"
+    
+    return [file1, file2]
+
+def mock_get_file_content(repo_full_name, file_path, ref):
+    if file_path == "src/parse.py":
+        return "def parse_date(raw: str):\n    return None\n"
+    elif file_path == "src/validate.py":
+        return "\n\n\n\ndef validate_order(order):\n    return True\n"
+    return ""
 
 # -- Tests: metadata extraction ----------------------------------------------
 
@@ -91,7 +111,11 @@ def test_unit_id_changes_with_different_sha():
 # -- Tests: ingest_diff output shape ------------------------------------------
 
 def test_ingest_diff_returns_list_of_changed_code_units():
-    result = ingest_diff(FAKE_WEBHOOK_PAYLOAD)
+    result = ingest_diff(
+        FAKE_WEBHOOK_PAYLOAD,
+        get_pr_files_fn=mock_get_pr_files,
+        get_file_content_fn=mock_get_file_content
+    )
     assert isinstance(result, list)
     assert len(result) > 0
     for unit in result:
@@ -99,7 +123,11 @@ def test_ingest_diff_returns_list_of_changed_code_units():
 
 
 def test_ingest_diff_unit_fields_are_populated():
-    result = ingest_diff(FAKE_WEBHOOK_PAYLOAD)
+    result = ingest_diff(
+        FAKE_WEBHOOK_PAYLOAD,
+        get_pr_files_fn=mock_get_pr_files,
+        get_file_content_fn=mock_get_file_content
+    )
     unit = result[0]
     assert unit.unit_id  # non-empty
     assert unit.file_path  # non-empty
@@ -112,14 +140,55 @@ def test_ingest_diff_unit_fields_are_populated():
 
 
 def test_ingest_diff_contains_both_diff_types():
-    """The fake data includes both 'added' and 'modified' units."""
-    result = ingest_diff(FAKE_WEBHOOK_PAYLOAD)
+    """The mock data includes both 'added' and 'modified' units."""
+    result = ingest_diff(
+        FAKE_WEBHOOK_PAYLOAD,
+        get_pr_files_fn=mock_get_pr_files,
+        get_file_content_fn=mock_get_file_content
+    )
     diff_types = {u.diff_type for u in result}
     assert "added" in diff_types
     assert "modified" in diff_types
 
 
 def test_ingest_diff_unit_ids_are_unique():
-    result = ingest_diff(FAKE_WEBHOOK_PAYLOAD)
+    result = ingest_diff(
+        FAKE_WEBHOOK_PAYLOAD,
+        get_pr_files_fn=mock_get_pr_files,
+        get_file_content_fn=mock_get_file_content
+    )
     ids = [u.unit_id for u in result]
     assert len(ids) == len(set(ids)), "unit_ids must be unique"
+
+
+# -- Integration Test ---------------------------------------------------------
+
+import os
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not os.getenv("RUN_INTEGRATION_TESTS"),
+    reason="Skipping integration test by default. Set RUN_INTEGRATION_TESTS=1 to run."
+)
+def test_ingest_diff_real_github_api():
+    """Hits the real GitHub API. Run only when requested."""
+    payload = {
+        "action": "opened",
+        "number": 1,
+        "pull_request": {
+            "number": 1,
+            "head": {"sha": "HEAD"},
+            "base": {"sha": "BASE"},
+        },
+        "repository": {
+            "owner": {"login": "ALR-ad"},
+            "name": "ARCHON",
+            "full_name": "ALR-ad/ARCHON",
+        },
+    }
+    # This will hit real get_pr_files/get_file_content. We expect it to 
+    # either return valid units or fail gracefully if PR #1 doesn't exist
+    # or lacks modified lines, but it should not crash.
+    # Note: depends on a valid GITHUB_TOKEN in env.
+    result = ingest_diff(payload)
+    assert isinstance(result, list)

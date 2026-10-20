@@ -86,8 +86,18 @@ def semantic_search(
             
         raw_candidates = store.query(embedding)
 
-        # Filter by similarity floor
-        filtered = [c for c in raw_candidates if c.similarity >= similarity_floor]
+        # Filter by similarity floor and ignore exact self-matches or renames
+        filtered = []
+        from shared.config import RENAME_SIMILARITY_THRESHOLD
+        for c in raw_candidates:
+            if c.similarity < similarity_floor:
+                continue
+            if c.file_path == unit.file_path:
+                if c.symbol_name == unit.symbol_name:
+                    continue
+                if c.similarity >= RENAME_SIMILARITY_THRESHOLD:
+                    continue
+            filtered.append(c)
 
         logger.info(
             "Node 2: %s::%s -> %d raw candidates, %d above floor (%.2f)",

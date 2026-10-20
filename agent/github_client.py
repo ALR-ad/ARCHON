@@ -179,3 +179,26 @@ def delete_bot_comment(
 
     logger.info("No bot comment to delete on %s #%d", repo_full_name, pr_number)
     return False
+
+
+def get_pr_files(repo_full_name: str, pr_number: int) -> list:
+    """
+    Fetch the list of files changed in a pull request.
+    Returns a list of PyGithub File objects.
+    """
+    gh = _get_github_client()
+    repo = gh.get_repo(repo_full_name)
+    pr = repo.get_pull(pr_number)
+    return list(pr.get_files())
+
+
+def get_file_content(repo_full_name: str, file_path: str, ref: str) -> str:
+    """
+    Fetch the raw string content of a file at a specific commit.
+    """
+    gh = _get_github_client()
+    repo = gh.get_repo(repo_full_name)
+    contents = repo.get_contents(file_path, ref=ref)
+    if isinstance(contents, list):
+        raise ValueError(f"{file_path} is a directory, not a file")
+    return contents.decoded_content.decode("utf-8", errors="replace")
