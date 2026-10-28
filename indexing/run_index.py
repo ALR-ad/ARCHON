@@ -2,7 +2,7 @@
 indexing/run_index.py
 
 PERSON A: CLI entrypoint -- run manually or via cron/GitHub Action on push to main.
-Coordinates repository ingestion, chunking, embedding, LanceDB upsert, and
+Coordinates repository ingestion, chunking, embedding, Qdrant upsert, and
 incremental state tracking.
 """
 
