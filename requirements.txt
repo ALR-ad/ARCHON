@@ -4,7 +4,7 @@ python-dotenv
 pyyaml
 
 # Person A - indexing
-tree-sitter
+tree-sitter>=0.25,<0.26  # 0.26.0 corrupts Node points on Windows/py3.13 -> segfaults in chunking
 tree-sitter-language-pack
 qdrant-client
 ollama
