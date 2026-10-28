@@ -63,20 +63,36 @@ def _run_node1(state: Dict[str, Any]) -> None:
     state["units"] = ingest_diff(payload)
 
 
-def _run_node2(state: Dict[str, Any], store: VectorStore, embed_fn: Optional[Callable] = None) -> None:
+def _run_node2(
+    state: Dict[str, Any],
+    store: VectorStore,
+    embed_fn: Optional[Callable] = None,
+    similarity_floor: Optional[float] = None,
+) -> None:
     units = state.get("units", [])
+    kwargs: Dict[str, Any] = {}
     if embed_fn:
-        state["matches"] = semantic_search(units, store, embed_fn=embed_fn)
-    else:
-        state["matches"] = semantic_search(units, store)
+        kwargs["embed_fn"] = embed_fn
+    if similarity_floor is not None:
+        kwargs["similarity_floor"] = similarity_floor
+    state["matches"] = semantic_search(units, store, **kwargs)
 
 
-def _run_node3(state: Dict[str, Any], eval_fn: Optional[Callable] = None) -> None:
+def _run_node3(
+    state: Dict[str, Any],
+    eval_fn: Optional[Callable] = None,
+    confidence_threshold: Optional[float] = None,
+    enabled_checks: Optional[Dict[str, bool]] = None,
+) -> None:
     matches = state.get("matches", [])
+    kwargs: Dict[str, Any] = {}
     if eval_fn:
-        state["findings"] = evaluate(matches, eval_fn=eval_fn)
-    else:
-        state["findings"] = evaluate(matches)
+        kwargs["eval_fn"] = eval_fn
+    if confidence_threshold is not None:
+        kwargs["confidence_threshold"] = confidence_threshold
+    if enabled_checks is not None:
+        kwargs["enabled_checks"] = enabled_checks
+    state["findings"] = evaluate(matches, **kwargs)
 
 
 def _run_node4(state: Dict[str, Any]) -> None:
@@ -90,10 +106,15 @@ def build_dag(
     store: Optional[VectorStore] = None,
     embed_fn: Optional[Callable] = None,
     eval_fn: Optional[Callable] = None,
+    similarity_floor: Optional[float] = None,
+    confidence_threshold: Optional[float] = None,
+    enabled_checks: Optional[Dict[str, bool]] = None,
 ) -> Graph:
     """
     Constructs the 4-node sequential DAG using Strands GraphBuilder.
     Dependencies can be injected for production, otherwise defaults to mocks.
+    Thresholds and enabled_checks come from .agent-review.yml; None means
+    use the shared/config.py defaults.
     """
     if store is None:
         store = MockVectorStore()
@@ -101,8 +122,15 @@ def build_dag(
     builder = GraphBuilder()
 
     # Create bound node functions
-    node2_bound = functools.partial(_run_node2, store=store, embed_fn=embed_fn)
-    node3_bound = functools.partial(_run_node3, eval_fn=eval_fn)
+    node2_bound = functools.partial(
+        _run_node2, store=store, embed_fn=embed_fn, similarity_floor=similarity_floor
+    )
+    node3_bound = functools.partial(
+        _run_node3,
+        eval_fn=eval_fn,
+        confidence_threshold=confidence_threshold,
+        enabled_checks=enabled_checks,
+    )
 
     # Add nodes
     builder.add_node(FunctionAgent("node1", _run_node1), "node1")

@@ -3,7 +3,7 @@ PERSON B: Node 4.
 Input:  List[Finding]
 Output: Rendered markdown string (one consolidated PR comment)
 
-The comment is grouped by file, with a suggestion block if
+The comment is grouped by file, with a suggested-fix code block if
 suggested_replacement exists, and a hidden HTML comment with finding IDs
 for idempotent updates.
 
@@ -67,10 +67,11 @@ def _render_finding(finding: Finding) -> str:
         parts.append("</details>")
         parts.append("")
 
-    # Suggestion block
+    # Suggested fix. Plain code block, not ```suggestion: GitHub only applies
+    # suggestions in line-level review comments, not in issue comments.
     if finding.suggested_replacement:
         parts.append("**Suggested fix:**")
-        parts.append(f"```suggestion")
+        parts.append(f"```{finding.unit.language}")
         parts.append(finding.suggested_replacement)
         parts.append("```")
         parts.append("")

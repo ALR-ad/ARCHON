@@ -4,8 +4,8 @@ Tests for agent/nodes/node4_comment.py
 Verifies:
 1. render_comment() returns empty string for no findings
 2. Rendered markdown contains expected sections (header, file groups, badges)
-3. Suggestion block is included when suggested_replacement exists
-4. Suggestion block is absent when suggested_replacement is None
+3. Suggested-fix block is included when suggested_replacement exists
+4. Suggested-fix block is absent when suggested_replacement is None
 5. Hidden HTML comment with finding IDs is present
 6. Findings are grouped by file path
 7. BOT_COMMENT_MARKER is present for idempotent updates
@@ -122,13 +122,14 @@ def test_render_both_badges():
 
 def test_render_includes_suggestion_when_present():
     result = render_comment([_make_finding(suggested_replacement="import { parse }")])
-    assert "```suggestion" in result
-    assert "import { parse }" in result
+    assert "**Suggested fix:**\n```typescript\nimport { parse }\n```" in result
+    # ```suggestion only works in line-level review comments, not issue comments
+    assert "```suggestion" not in result
 
 
 def test_render_omits_suggestion_when_none():
     result = render_comment([_make_finding(suggested_replacement=None)])
-    assert "```suggestion" not in result
+    assert "Suggested fix" not in result
 
 
 # -- Tests: similar code references -------------------------------------------

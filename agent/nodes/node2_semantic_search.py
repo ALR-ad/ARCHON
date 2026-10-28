@@ -1,12 +1,10 @@
 """
 PERSON B: Node 2.
 Input:  List[ChangedCodeUnit]
-Calls:  mock_embed_text() (stand-in for shared.interfaces.embed_text()),
-        VectorStore.query() (via agent.llm.mock_vectorstore.MockVectorStore)
-Output: List[Tuple[ChangedCodeUnit, List[Candidate]]] filtered by SIMILARITY_FLOOR
-
-The real embed_text() is owned by Person A and raises NotImplementedError.
-We use a local mock until Person A's implementation is ready to integrate.
+Calls:  embed_fn (the real indexing embed_text() in production,
+        mock_embed_text() by default for tests) and VectorStore.query()
+        (QdrantVectorStore in production, MockVectorStore in tests)
+Output: List[Tuple[ChangedCodeUnit, List[Candidate]]] filtered by the similarity floor
 """
 
 import logging
