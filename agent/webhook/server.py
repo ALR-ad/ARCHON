@@ -10,6 +10,10 @@ from typing import Any, Dict, Optional
 from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.responses import JSONResponse
 
+# Rendered comments contain emoji; a Windows console (cp1252) can't encode them.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 # Configure root logger so application-level loggers have a handler.
 # Use stderr (unbuffered on Windows) to avoid the stdout buffering issue
 # that occurs when uvicorn --reload spawns a child subprocess.

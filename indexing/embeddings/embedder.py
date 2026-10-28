@@ -26,6 +26,23 @@ _CACHE_FILE_PATH: Optional[Path] = None
 # Optional test hook for offline mocking
 _CUSTOM_EMBEDDER: Optional[Callable[[str], List[float]]] = None
 
+# nomic-embed-text has a 2048-token context; large class chunks (10k+ chars)
+# overflow it. Embed a prefix instead -- methods are indexed as their own chunks.
+MAX_EMBED_CHARS = 6000
+MIN_EMBED_CHARS = 500
+
+# Reused clients keep the HTTP connection alive. A new client per call reconnects
+# every time, and on Windows "localhost" tries IPv6 first, costing ~2s per call.
+# Keyed by the Client class too, so tests that patch ollama.Client get a fresh one.
+_CLIENTS: Dict[tuple, "ollama.Client"] = {}
+
+
+def _get_client(host: str) -> "ollama.Client":
+    key = (ollama.Client, host)
+    if key not in _CLIENTS:
+        _CLIENTS[key] = ollama.Client(host=host)
+    return _CLIENTS[key]
+
 
 class OllamaServiceError(RuntimeError):
     """Raised when Ollama is unreachable or model is unavailable."""
@@ -121,8 +138,19 @@ def embed_text(
     target_model = model or EMBEDDING_MODEL
 
     try:
-        client = ollama.Client(host=target_host)
-        res = client.embeddings(model=target_model, prompt=text)
+        client = _get_client(target_host)
+        prompt = text[:MAX_EMBED_CHARS]
+        while True:
+            try:
+                res = client.embeddings(model=target_model, prompt=prompt)
+                break
+            except ollama.ResponseError as e:
+                # Dense code can still exceed the context at MAX_EMBED_CHARS; keep halving.
+                if "context length" not in str(e) or len(prompt) <= MIN_EMBED_CHARS:
+                    raise
+                prompt = prompt[: len(prompt) // 2]
+        if len(prompt) < len(text):
+            logger.debug(f"Embedded first {len(prompt)} of {len(text)} chars (context limit)")
         embedding = res.get("embedding")
         if not embedding or not isinstance(embedding, list):
             raise ValueError(f"Ollama returned unexpected embedding shape: {res}")

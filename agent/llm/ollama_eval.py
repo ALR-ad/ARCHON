@@ -21,6 +21,10 @@ logger = logging.getLogger("agent.llm.ollama_eval")
 
 OLLAMA_GENERATE_URL = "http://localhost:11434/api/generate"
 
+# Shared session keeps the connection alive between calls (a fresh connection to
+# "localhost" on Windows tries IPv6 first and adds ~2s per call).
+_session = requests.Session()
+
 _SYSTEM_PROMPT = """\
 You are a code review assistant that detects duplicated logic and \
 architectural convention violations. You will be given a NEW code unit \
@@ -131,7 +135,7 @@ def evaluate_with_ollama(
     )
 
     try:
-        response = requests.post(
+        response = _session.post(
             ollama_url,
             json={
                 "model": model,

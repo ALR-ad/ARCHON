@@ -6,6 +6,7 @@ from indexing.embeddings.embedder import (
     set_custom_embedder,
     deterministic_mock_embed,
     OllamaServiceError,
+    MAX_EMBED_CHARS,
     _EMBEDDING_CACHE,
 )
 from shared.config import EMBEDDING_DIM
@@ -64,6 +65,37 @@ def test_embed_text_ollama_unavailable_raises_clear_error():
 
         assert "Ollama embedding service error" in str(exc_info.value)
         assert "ollama pull" in str(exc_info.value)
+
+
+def test_embed_text_truncates_long_input():
+    set_custom_embedder(None)
+    fake_vec = [0.1] * EMBEDDING_DIM
+    with patch("ollama.Client") as mock_client_cls:
+        mock_instance = MagicMock()
+        mock_instance.embeddings.return_value = {"embedding": fake_vec}
+        mock_client_cls.return_value = mock_instance
+
+        assert embed_text("x" * (MAX_EMBED_CHARS * 2) + "long_truncate_case") == fake_vec
+        sent = mock_instance.embeddings.call_args.kwargs["prompt"]
+        assert len(sent) == MAX_EMBED_CHARS
+
+
+def test_embed_text_halves_on_context_length_error():
+    import ollama
+
+    set_custom_embedder(None)
+    fake_vec = [0.2] * EMBEDDING_DIM
+    with patch("ollama.Client") as mock_client_cls:
+        mock_instance = MagicMock()
+        mock_instance.embeddings.side_effect = [
+            ollama.ResponseError("the input length exceeds the context length", 500),
+            {"embedding": fake_vec},
+        ]
+        mock_client_cls.return_value = mock_instance
+
+        assert embed_text("y" * MAX_EMBED_CHARS + "halve_case") == fake_vec
+        prompts = [c.kwargs["prompt"] for c in mock_instance.embeddings.call_args_list]
+        assert [len(p) for p in prompts] == [MAX_EMBED_CHARS, MAX_EMBED_CHARS // 2]
 
 
 def test_embed_text_live_ollama_smoke():
