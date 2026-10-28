@@ -28,6 +28,7 @@ def evaluate(
     matches: List[Tuple[ChangedCodeUnit, List[Candidate]]],
     eval_fn: Optional[Callable[[ChangedCodeUnit, List[Candidate]], Optional[Dict[str, Any]]]] = None,
     confidence_threshold: float = CONFIDENCE_THRESHOLD,
+    enabled_checks: Optional[Dict[str, bool]] = None,
 ) -> List[Finding]:
     """
     Node 3 entry point.
@@ -41,12 +42,18 @@ def evaluate(
         eval_fn: Evaluation function. Defaults to evaluate_with_ollama.
                  Use fake_evaluate for testing without Ollama.
         confidence_threshold: Minimum confidence to keep a finding.
+        enabled_checks: From .agent-review.yml, e.g.
+                 {"duplication": True, "architectural_violation": False}.
+                 A disabled check is never reported. None enables both.
 
     Returns:
         List[Finding] with only high-confidence results.
     """
     if eval_fn is None:
         eval_fn = evaluate_with_ollama
+    checks = enabled_checks or {}
+    check_duplication = bool(checks.get("duplication", True))
+    check_architecture = bool(checks.get("architectural_violation", True))
 
     findings: List[Finding] = []
 
@@ -69,8 +76,8 @@ def evaluate(
             continue
 
         confidence = float(result.get("confidence", 0.0))
-        is_dup = bool(result.get("is_duplicate", False))
-        is_arch = bool(result.get("is_architectural_violation", False))
+        is_dup = check_duplication and bool(result.get("is_duplicate", False))
+        is_arch = check_architecture and bool(result.get("is_architectural_violation", False))
 
         # Skip if neither duplicate nor architectural violation
         if not is_dup and not is_arch:

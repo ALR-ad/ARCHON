@@ -3,9 +3,9 @@ PERSON B: Node 1.
 Input:  GitHub webhook payload (PR number, repo, head_sha, base_sha)
 Output: List[ChangedCodeUnit]  (see shared/schemas.py)
 
-For now uses hardcoded fake diff data instead of calling the real GitHub API.
-The real GitHub API integration lives in agent/github_client.py and will be
-wired in once Task 5 is complete.
+Fetches the PR's changed files and their contents at head_sha via
+agent/github_client.py, chunks them with tree-sitter, and keeps only the
+functions/classes that overlap added or modified lines.
 """
 
 import hashlib

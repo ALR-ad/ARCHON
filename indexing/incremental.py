@@ -21,10 +21,6 @@ from indexing.chunking.wiki_chunker import chunk_wiki
 from indexing.embeddings.embedder import embed_text, init_cache, save_cache
 from indexing.ingest.repo_source import RepoSource, SourceFile
 from indexing.ingest.wiki_source import WikiDocument, WikiSource
-from indexing.chunking.wiki_chunker import chunk_wiki
-from indexing.embeddings.embedder import embed_text, init_cache, save_cache
-from indexing.ingest.repo_source import RepoSource, SourceFile
-from indexing.ingest.wiki_source import WikiDocument, WikiSource
 from indexing.vectorstore.store import QdrantVectorStore
 from indexing.config import QDRANT_PATH
 

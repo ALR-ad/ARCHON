@@ -118,6 +118,16 @@ Run the webhook locally:
 uvicorn agent.webhook.server:app --reload
 ```
 
+The webhook answers `202 Accepted` right away and runs the pipeline in the
+background, since embedding and LLM calls take far longer than GitHub's 10s
+delivery timeout. Set `GITHUB_WEBHOOK_SECRET` in `.env` to the same secret as
+the GitHub webhook: requests without a valid `X-Hub-Signature-256` are then
+rejected with 401. Comments are only logged until `POST_TO_GITHUB=true`.
+
+`similarity_floor`, `confidence_threshold` and `enabled_checks` in
+`.agent-review.yml` (read from `AGENT_REVIEW_CONFIG_ROOT`, default `.`)
+override the defaults in `shared/config.py`. Restart the server after editing it.
+
 Run tests:
 
 ```bash

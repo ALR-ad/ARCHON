@@ -224,3 +224,32 @@ def test_evaluate_multiple_matches():
     # Each finding should reference its own unit
     assert findings[0].unit.symbol_name == "parseOrderDate"
     assert findings[1].unit.symbol_name == "validateOrderPayload"
+
+
+def test_evaluate_drops_disabled_duplication_check():
+    """enabled_checks.duplication=false means a duplicate-only result is not reported."""
+    findings = evaluate(
+        [(_make_unit(), [_make_candidate()])],
+        eval_fn=fake_evaluate,
+        enabled_checks={"duplication": False, "architectural_violation": True},
+    )
+    assert findings == []
+
+
+def test_evaluate_keeps_enabled_check_when_other_disabled():
+    def both_issues(unit, candidates):
+        return {
+            "is_duplicate": True,
+            "is_architectural_violation": True,
+            "confidence": 0.9,
+            "reasoning": "Both.",
+        }
+
+    findings = evaluate(
+        [(_make_unit(), [_make_candidate()])],
+        eval_fn=both_issues,
+        enabled_checks={"duplication": False},
+    )
+    assert len(findings) == 1
+    assert findings[0].is_duplicate is False
+    assert findings[0].is_architectural_violation is True
