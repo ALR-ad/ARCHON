@@ -6,7 +6,7 @@ Uses a lightweight FunctionAgent adapter to wrap our deterministic
 functions into the AgentBase interface expected by the graph.
 """
 
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 import functools
 
 from strands.agent.base import AgentBase
@@ -58,9 +58,11 @@ class FunctionAgent(AgentBase):
 
 # Node Wrappers for functions
 
-def _run_node1(state: Dict[str, Any]) -> None:
+def _run_node1(state: Dict[str, Any], ignore_paths: Optional[List[str]] = None) -> None:
     payload = state.get("payload", {})
-    state["units"] = ingest_diff(payload)
+    base_code: Dict[str, str] = {}
+    state["units"] = ingest_diff(payload, ignore_paths=ignore_paths, base_versions=base_code)
+    state["base_code"] = base_code
 
 
 def _run_node2(
@@ -68,9 +70,10 @@ def _run_node2(
     store: VectorStore,
     embed_fn: Optional[Callable] = None,
     similarity_floor: Optional[float] = None,
+    ignore_paths: Optional[List[str]] = None,
 ) -> None:
     units = state.get("units", [])
-    kwargs: Dict[str, Any] = {}
+    kwargs: Dict[str, Any] = {"ignore_paths": ignore_paths, "base_code": state.get("base_code")}
     if embed_fn:
         kwargs["embed_fn"] = embed_fn
     if similarity_floor is not None:
@@ -109,12 +112,14 @@ def build_dag(
     similarity_floor: Optional[float] = None,
     confidence_threshold: Optional[float] = None,
     enabled_checks: Optional[Dict[str, bool]] = None,
+    review_ignore_paths: Optional[List[str]] = None,
 ) -> Graph:
     """
     Constructs the 4-node sequential DAG using Strands GraphBuilder.
     Dependencies can be injected for production, otherwise defaults to mocks.
-    Thresholds and enabled_checks come from .agent-review.yml; None means
-    use the shared/config.py defaults.
+    Thresholds, enabled_checks and review_ignore_paths come from
+    .agent-review.yml; None means use the defaults (shared/config.py,
+    agent/review_filters.py).
     """
     if store is None:
         store = MockVectorStore()
@@ -122,8 +127,13 @@ def build_dag(
     builder = GraphBuilder()
 
     # Create bound node functions
+    node1_bound = functools.partial(_run_node1, ignore_paths=review_ignore_paths)
     node2_bound = functools.partial(
-        _run_node2, store=store, embed_fn=embed_fn, similarity_floor=similarity_floor
+        _run_node2,
+        store=store,
+        embed_fn=embed_fn,
+        similarity_floor=similarity_floor,
+        ignore_paths=review_ignore_paths,
     )
     node3_bound = functools.partial(
         _run_node3,
@@ -133,7 +143,7 @@ def build_dag(
     )
 
     # Add nodes
-    builder.add_node(FunctionAgent("node1", _run_node1), "node1")
+    builder.add_node(FunctionAgent("node1", node1_bound), "node1")
     builder.add_node(FunctionAgent("node2", node2_bound), "node2")
     builder.add_node(FunctionAgent("node3", node3_bound), "node3")
     builder.add_node(FunctionAgent("node4", _run_node4), "node4")

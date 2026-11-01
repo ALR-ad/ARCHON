@@ -192,3 +192,43 @@ def test_ingest_diff_real_github_api():
     # Note: depends on a valid GITHUB_TOKEN in env.
     result = ingest_diff(payload)
     assert isinstance(result, list)
+
+
+# -- Tests: review_ignore_paths and base versions ----------------------------
+
+def _files_with_test_file(repo_full_name, pr_number):
+    files = mock_get_pr_files(repo_full_name, pr_number)
+    test_file = MagicMock()
+    test_file.status = "added"
+    test_file.filename = "tests/test_parse.py"
+    test_file.patch = "@@ -1,0 +1,2 @@\n+def test_parse():\n+    assert True\n"
+    return files + [test_file]
+
+
+def _content_with_test_file(repo_full_name, file_path, ref):
+    if file_path == "tests/test_parse.py":
+        return "def test_parse():\n    assert True\n"
+    return mock_get_file_content(repo_full_name, file_path, ref)
+
+
+def test_ingest_diff_skips_test_files_by_default():
+    result = ingest_diff(FAKE_WEBHOOK_PAYLOAD, _files_with_test_file, _content_with_test_file)
+    assert all(not u.file_path.startswith("tests/") for u in result)
+    result = ingest_diff(FAKE_WEBHOOK_PAYLOAD, _files_with_test_file, _content_with_test_file, ignore_paths=[])
+    assert any(u.file_path == "tests/test_parse.py" for u in result)
+
+
+def test_ingest_diff_collects_base_versions_for_modified_functions():
+    base_sha = FAKE_WEBHOOK_PAYLOAD["pull_request"]["base"]["sha"]
+
+    def content(repo_full_name, file_path, ref):
+        if file_path == "src/validate.py" and ref == base_sha:
+            return "\n\n\n\ndef validate_order(order):\n    return False\n"
+        return mock_get_file_content(repo_full_name, file_path, ref)
+
+    base_versions = {}
+    result = ingest_diff(FAKE_WEBHOOK_PAYLOAD, mock_get_pr_files, content, base_versions=base_versions)
+    validate = next(u for u in result if u.symbol_name == "validate_order")
+    parse = next(u for u in result if u.symbol_name == "parse_date")
+    assert "return False" in base_versions[validate.unit_id]
+    assert parse.unit_id not in base_versions  # added file has no base version

@@ -56,6 +56,7 @@ async def lifespan(app: FastAPI):
         similarity_floor=float(review_cfg.get("similarity_floor", SIMILARITY_FLOOR)),
         confidence_threshold=float(review_cfg.get("confidence_threshold", CONFIDENCE_THRESHOLD)),
         enabled_checks=review_cfg.get("enabled_checks"),
+        review_ignore_paths=review_cfg.get("review_ignore_paths"),
     )
     logger.info("DAG built successfully.")
     yield
