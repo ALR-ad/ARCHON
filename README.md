@@ -124,9 +124,16 @@ delivery timeout. Set `GITHUB_WEBHOOK_SECRET` in `.env` to the same secret as
 the GitHub webhook: requests without a valid `X-Hub-Signature-256` are then
 rejected with 401. Comments are only logged until `POST_TO_GITHUB=true`.
 
-`similarity_floor`, `confidence_threshold` and `enabled_checks` in
-`.agent-review.yml` (read from `AGENT_REVIEW_CONFIG_ROOT`, default `.`)
-override the defaults in `shared/config.py`. Restart the server after editing it.
+`similarity_floor`, `confidence_threshold`, `enabled_checks` and
+`review_ignore_paths` in `.agent-review.yml` (read from
+`AGENT_REVIEW_CONFIG_ROOT`, default `.`) override the defaults in
+`shared/config.py`. Restart the server after editing it.
+
+To keep the review quiet, Node 2 drops matches that aren't duplication:
+test files (unless `review_ignore_paths` says otherwise), code that calls or
+wraps the changed function (or that it calls), and, for modified functions,
+matches the base-branch version already had, so editing an old function
+doesn't resurface old similarities.
 
 Run tests:
 

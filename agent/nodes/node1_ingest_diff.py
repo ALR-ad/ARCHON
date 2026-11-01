@@ -10,7 +10,7 @@ functions/classes that overlap added or modified lines.
 
 import hashlib
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from shared.schemas import ChangedCodeUnit
 
@@ -60,6 +60,7 @@ import os
 import re
 from agent.github_client import get_pr_files, get_file_content
 from indexing.chunking.code_chunker import chunk_code
+from agent.review_filters import is_review_ignored
 
 
 def extract_modified_lines(patch: str) -> set[int]:
@@ -91,10 +92,21 @@ def guess_language(filename: str) -> str:
     return ext[1:] if ext else "plaintext"
 
 
+def _base_symbol_code(
+    get_file_content_fn, repo_full_name: str, file_path: str, base_sha: str, lang: str
+) -> Dict[str, str]:
+    """symbol_name -> code for every chunk of file_path at the base commit."""
+    raw = get_file_content_fn(repo_full_name, file_path, base_sha)
+    chunks = chunk_code(file_path=file_path, code=raw, language=lang, commit_sha=base_sha)
+    return {c.symbol_name: c.code for c in chunks}
+
+
 def ingest_diff(
     payload: Dict[str, Any],
     get_pr_files_fn=None,
-    get_file_content_fn=None
+    get_file_content_fn=None,
+    ignore_paths: Optional[List[str]] = None,
+    base_versions: Optional[Dict[str, str]] = None,
 ) -> List[ChangedCodeUnit]:
     """
     Node 1 entry point.
@@ -102,6 +114,11 @@ def ingest_diff(
     Takes a raw GitHub webhook payload (pull_request event), extracts
     metadata, fetches the real diff and file contents from GitHub,
     chunks the AST, and filters the chunks to those that were modified.
+
+    ignore_paths: files to skip entirely (None = tests, see review_filters).
+    base_versions: if given, filled with unit_id -> the unit's code at the
+        base commit, for functions in modified files that already existed.
+        Node 2 uses it to drop matches the old version already had.
     """
     if get_pr_files_fn is None:
         from agent.github_client import get_pr_files
@@ -129,6 +146,9 @@ def ingest_diff(
     for f in files:
         if f.status == "removed" or not f.patch:
             continue
+        if is_review_ignored(f.filename, ignore_paths):
+            logger.info("Node 1: skipping %s (review_ignore_paths)", f.filename)
+            continue
             
         modified_lines = extract_modified_lines(f.patch)
         if not modified_lines:
@@ -155,10 +175,24 @@ def ingest_diff(
             continue
             
         # Keep chunks that overlap with modified lines
+        kept = []
         for chunk in chunks:
             chunk_range = set(range(chunk.start_line, chunk.end_line + 1))
             if chunk_range.intersection(modified_lines):
-                units.append(chunk)
+                kept.append(chunk)
+        units.extend(kept)
+
+        if base_versions is not None and f.status == "modified" and kept:
+            try:
+                old = _base_symbol_code(
+                    get_file_content_fn, meta["repo_full_name"], f.filename, meta["base_sha"], lang
+                )
+            except Exception as e:
+                logger.warning("Failed to fetch base version of %s: %s", f.filename, e)
+                old = {}
+            for chunk in kept:
+                if chunk.symbol_name in old:
+                    base_versions[chunk.unit_id] = old[chunk.symbol_name]
 
     logger.info("Node 1: produced %d ChangedCodeUnit(s)", len(units))
     return units

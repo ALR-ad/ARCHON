@@ -193,3 +193,62 @@ def test_different_file_same_symbol_high_similarity_included():
     results = semantic_search([unit], CustomStore([c]))
     assert len(results) == 1
 
+
+
+# -- Tests: noise filters -----------------------------------------------------
+
+def _cand(chunk_id, file_path, symbol, code="", similarity=0.9, source_type="code"):
+    return Candidate(chunk_id=chunk_id, file_path=file_path, symbol_name=symbol,
+                     code_snippet=code, source_type=source_type, similarity=similarity)
+
+
+def test_test_file_candidates_dropped_by_default():
+    unit = _make_unit()
+    c = _cand("t1", "tests/test_utils.py", "test_util")
+    assert semantic_search([unit], CustomStore([c])) == []
+    # Explicit empty ignore list reviews tests too
+    assert len(semantic_search([unit], CustomStore([c]), ignore_paths=[])) == 1
+
+
+def test_wiki_candidates_never_path_filtered():
+    unit = _make_unit()
+    c = _cand("w1", "tests/STYLE.md", "", similarity=0.9, source_type="wiki")
+    assert len(semantic_search([unit], CustomStore([c]))) == 1
+
+
+def test_caller_candidate_dropped():
+    unit = _make_unit(symbol="parseDate", code="function parseDate(raw) { return new Date(raw); }")
+    caller = _cand("c1", "src/orders.ts", "loadOrder", code="function loadOrder(o) { return parseDate(o.date); }")
+    assert semantic_search([unit], CustomStore([caller])) == []
+
+
+def test_candidate_called_by_unit_dropped():
+    unit = _make_unit(symbol="loadOrder", code="function loadOrder(o) { return parseDate(o.date); }")
+    callee = _cand("c1", "src/dates.ts", "parseDate", code="function parseDate(raw) { return new Date(raw); }")
+    assert semantic_search([unit], CustomStore([callee])) == []
+
+
+class OldVsNewStore(VectorStore):
+    """Returns different candidates depending on which version is queried."""
+    def __init__(self, by_first_value):
+        self.by_first_value = by_first_value
+    def query(self, embedding, top_k=8, filters=None):
+        return self.by_first_value[embedding[0]]
+    def get_index_status(self):
+        return {}
+
+
+def test_matches_the_base_version_already_had_are_dropped():
+    unit = _make_unit(symbol="validate", code="NEW")
+    unit.diff_type = "modified"
+    old_match = _cand("old", "src/a.ts", "checkA")
+    new_match = _cand("new", "src/b.ts", "checkB")
+    store = OldVsNewStore({1.0: [old_match, new_match], 0.0: [old_match]})
+    embed = lambda text: [1.0] if text == "NEW" else [0.0]
+
+    results = semantic_search([unit], store, embed_fn=embed, base_code={unit.unit_id: "OLD"})
+    assert [c.chunk_id for c in results[0][1]] == ["new"]
+
+    # Without a base version both matches are kept
+    results = semantic_search([unit], store, embed_fn=embed)
+    assert {c.chunk_id for c in results[0][1]} == {"old", "new"}

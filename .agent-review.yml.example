@@ -7,3 +7,8 @@ ignore_paths:
 enabled_checks:
   duplication: true
   architectural_violation: true
+# Files skipped by the PR review, both as changed code and as matches.
+# Omit to skip tests (tests/**, test_*.py, *.spec.*, ...); set [] to review everything.
+# review_ignore_paths:
+#   - "tests/**"
+#   - "**/migrations/**"
