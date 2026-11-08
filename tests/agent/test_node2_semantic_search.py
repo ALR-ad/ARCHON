@@ -252,3 +252,28 @@ def test_matches_the_base_version_already_had_are_dropped():
     # Without a base version both matches are kept
     results = semantic_search([unit], store, embed_fn=embed)
     assert {c.chunk_id for c in results[0][1]} == {"old", "new"}
+
+
+def test_base_match_just_below_floor_counts_as_preexisting():
+    """An edit that nudges an old 0.80 match to 0.83 must not surface it at floor 0.82."""
+    unit = _make_unit(symbol="validate", code="NEW")
+    store = OldVsNewStore({
+        1.0: [_cand("near", "src/a.ts", "checkA", similarity=0.83)],
+        0.0: [_cand("near", "src/a.ts", "checkA", similarity=0.80)],
+    })
+    embed = lambda text: [1.0] if text == "NEW" else [0.0]
+    results = semantic_search([unit], store, embed_fn=embed, similarity_floor=0.82,
+                              base_code={unit.unit_id: "OLD"})
+    assert results == []
+
+
+def test_match_much_closer_than_base_version_is_kept():
+    """If the PR makes the code much more similar (0.60 -> 0.90), that's new duplication."""
+    unit = _make_unit(symbol="validate", code="NEW")
+    store = OldVsNewStore({
+        1.0: [_cand("grew", "src/a.ts", "checkA", similarity=0.90)],
+        0.0: [_cand("grew", "src/a.ts", "checkA", similarity=0.60)],
+    })
+    embed = lambda text: [1.0] if text == "NEW" else [0.0]
+    results = semantic_search([unit], store, embed_fn=embed, base_code={unit.unit_id: "OLD"})
+    assert [c.chunk_id for c in results[0][1]] == ["grew"]
