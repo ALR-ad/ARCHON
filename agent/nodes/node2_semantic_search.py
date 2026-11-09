@@ -17,6 +17,11 @@ from agent.review_filters import is_caller_or_wrapper, is_review_ignored
 
 logger = logging.getLogger("agent.nodes.node2")
 
+# A match counts as pre-existing if the unit's base version already scored
+# within this margin of the new score -- even below the floor, so a small edit
+# that nudges an old similarity over the floor doesn't look new.
+PREEXISTING_MARGIN = 0.05
+
 
 def mock_embed_text(text: str) -> List[float]:
     """
@@ -48,8 +53,9 @@ def semantic_search(
       - the unit itself, or a likely rename of it (same file)
       - in review-ignored paths (tests by default)
       - callers / wrappers of the unit, or code the unit calls
-      - already matched by the unit's base-branch version (base_code), so a
-        small edit to an old function doesn't resurface old similarities
+      - already matched about as well (within PREEXISTING_MARGIN) by the
+        unit's base-branch version (base_code), so a small edit to an old
+        function doesn't resurface old similarities
     Units with zero candidates after filtering are dropped from the output.
 
     Args:
@@ -99,10 +105,10 @@ def semantic_search(
 
         raw_candidates = store.query(embedding)
 
-        preexisting = set()
+        old_scores: Dict[str, float] = {}
         if unit.unit_id in base_index and embeddings[base_index[unit.unit_id]]:
             old_candidates = store.query(embeddings[base_index[unit.unit_id]])
-            preexisting = {c.chunk_id for c in old_candidates if c.similarity >= similarity_floor}
+            old_scores = {c.chunk_id: c.similarity for c in old_candidates}
 
         filtered = []
         dropped = {"preexisting": 0, "ignored_path": 0, "caller_or_wrapper": 0}
@@ -114,7 +120,7 @@ def semantic_search(
                     continue
                 if c.similarity >= RENAME_SIMILARITY_THRESHOLD:
                     continue
-            if c.chunk_id in preexisting:
+            if c.chunk_id in old_scores and old_scores[c.chunk_id] >= c.similarity - PREEXISTING_MARGIN:
                 dropped["preexisting"] += 1
                 continue
             if c.source_type == "code":

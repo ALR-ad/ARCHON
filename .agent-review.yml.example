@@ -1,4 +1,6 @@
-similarity_floor: 0.78
+# Raised from 0.78: in testing, disguised duplicates scored 0.83-0.90 while
+# false positives peaked at 0.80.
+similarity_floor: 0.82
 confidence_threshold: 0.75
 ignore_paths:
   - "**/node_modules/**"
