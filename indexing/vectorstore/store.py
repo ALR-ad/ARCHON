@@ -60,6 +60,9 @@ class QdrantVectorStore(VectorStore):
             target_url = url or QDRANT_URL
             self.client = QdrantClient(url=target_url)
             self.db_path = None
+            # Server mode has no local db folder; keep index metadata in QDRANT_PATH
+            self.state_dir = Path(QDRANT_PATH).resolve()
+            self.state_dir.mkdir(parents=True, exist_ok=True)
         else:
             storage_path = Path(path or QDRANT_PATH).resolve()
             storage_path.mkdir(parents=True, exist_ok=True)
@@ -102,8 +105,9 @@ class QdrantVectorStore(VectorStore):
 
 
     def _get_metadata_path(self) -> Optional[Path]:
-        if self.db_path:
-            return self.db_path / METADATA_FILENAME
+        state_dir = getattr(self, "state_dir", None) or self.db_path
+        if state_dir:
+            return state_dir / METADATA_FILENAME
         return None
 
     def _read_metadata(self) -> Dict[str, str]:

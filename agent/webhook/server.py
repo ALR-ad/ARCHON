@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import hmac
 import json
@@ -29,8 +30,9 @@ from agent.github_client import post_or_update_comment
 from agent.nodes.node1_ingest_diff import _extract_pr_metadata
 from indexing.vectorstore.store import QdrantVectorStore
 from indexing.embeddings.embedder import embed_text
+from indexing.incremental import IncrementalIndexer
 from agent.llm.ollama_eval import evaluate_with_ollama
-from indexing.config import QDRANT_PATH, load_agent_review_config
+from indexing.config import QDRANT_PATH, QDRANT_URL, load_agent_review_config
 from shared.config import CONFIDENCE_THRESHOLD, SIMILARITY_FLOOR
 
 logger = logging.getLogger("agent.webhook")
@@ -38,6 +40,18 @@ logger = logging.getLogger("agent.webhook")
 # Initialize global dependencies for the DAG
 vector_store = None
 agent_graph = None
+
+# Reviews and re-indexing run one at a time: they share one Ollama instance
+# and one vector store, and a review should see a fully updated index.
+_work_lock = asyncio.Lock()
+# True while a re-index is waiting for the lock. Each run pulls the latest
+# commit, so pushes that arrive meanwhile don't need a run of their own.
+_reindex_queued = False
+
+
+def _index_repo() -> Optional[str]:
+    """The one repository this server indexes ("owner/name"), if configured."""
+    return os.getenv("INDEX_REPO") or None
 
 
 @asynccontextmanager
@@ -47,7 +61,7 @@ async def lifespan(app: FastAPI):
     review_cfg = load_agent_review_config(os.getenv("AGENT_REVIEW_CONFIG_ROOT", "."))
 
     # Instantiate the real vector store and bind it to the DAG
-    logger.info("Initializing QdrantVectorStore at %s", QDRANT_PATH)
+    logger.info("Initializing QdrantVectorStore at %s", QDRANT_URL or QDRANT_PATH)
     vector_store = QdrantVectorStore(path=QDRANT_PATH)
     agent_graph = build_dag(
         store=vector_store,
@@ -59,7 +73,16 @@ async def lifespan(app: FastAPI):
         review_ignore_paths=review_cfg.get("review_ignore_paths"),
     )
     logger.info("DAG built successfully.")
+
+    # First run: build the index so reviews have something to search
+    initial_index = None
+    if _index_repo() and vector_store.count() == 0:
+        logger.info("Index is empty; indexing %s in the background", _index_repo())
+        initial_index = asyncio.create_task(reindex_repository(_index_repo()))
+
     yield
+    if initial_index and not initial_index.done():
+        initial_index.cancel()
     if vector_store:
         vector_store.close()
 
@@ -80,18 +103,54 @@ def health_check():
     return {"status": "ok"}
 
 
+def _run_incremental_index(repo_full_name: str):
+    """Pull the repo's default branch and index what changed (blocking)."""
+    indexer = IncrementalIndexer(
+        repo_root=None,
+        github_repo=repo_full_name,
+        vector_store=vector_store,
+        embed_fn=embed_text,
+    )
+    # No indexer.close(): the vector store is shared with the DAG
+    return indexer.run_indexing()
+
+
+async def reindex_repository(repo_full_name: str) -> None:
+    """Bring the index up to date with the repo's default branch."""
+    global _reindex_queued
+    async with _work_lock:
+        _reindex_queued = False
+        logger.info("Re-indexing %s", repo_full_name)
+        try:
+            stats = await asyncio.to_thread(_run_incremental_index, repo_full_name)
+        except Exception as e:
+            logger.error("Re-index of %s failed: %s", repo_full_name, e, exc_info=True)
+            return
+        logger.info(
+            "Re-index of %s done at %s: %d added, %d modified, %d deleted, %d renamed, %d chunks upserted",
+            repo_full_name,
+            (stats.last_indexed_sha or "unknown")[:8],
+            stats.added_files,
+            stats.modified_files,
+            stats.deleted_files,
+            stats.renamed_files,
+            stats.chunks_upserted,
+        )
+
+
 async def process_pull_request(payload: Dict[str, Any]) -> None:
     """Run the DAG for one PR and post (or log) the resulting comment."""
     meta = _extract_pr_metadata(payload)
-    logger.info("Processing PR #%s for %s", meta["pr_number"], meta["repo_full_name"])
 
     final_state = {"payload": payload}
-    try:
-        async for chunk in agent_graph.stream_async(task="evaluate", invocation_state=final_state):
-            pass
-    except Exception as e:
-        logger.error("DAG execution failed: %s", e, exc_info=True)
-        return
+    async with _work_lock:
+        logger.info("Processing PR #%s for %s", meta["pr_number"], meta["repo_full_name"])
+        try:
+            async for chunk in agent_graph.stream_async(task="evaluate", invocation_state=final_state):
+                pass
+        except Exception as e:
+            logger.error("DAG execution failed: %s", e, exc_info=True)
+            return
 
     # Extract the comment
     comment = final_state.get("comment", "")
@@ -116,6 +175,31 @@ async def process_pull_request(payload: Dict[str, Any]) -> None:
         logger.error("Failed to post comment: %s", e, exc_info=True)
 
 
+def _handle_push(payload: Dict[str, Any], background_tasks: BackgroundTasks):
+    """A push to the default branch makes the index stale; queue a re-index."""
+    global _reindex_queued
+    repo = payload.get("repository") or {}
+    repo_full_name = repo.get("full_name", "")
+    default_ref = f"refs/heads/{repo.get('default_branch', 'main')}"
+
+    if payload.get("ref") != default_ref or payload.get("deleted"):
+        return {"status": "ignored", "reason": "Push is not to the default branch"}
+    if not _index_repo():
+        return {"status": "ignored", "reason": "INDEX_REPO is not set; automatic re-indexing is off"}
+    if repo_full_name.lower() != _index_repo().lower():
+        return {"status": "ignored", "reason": f"This server indexes {_index_repo()}, not {repo_full_name}"}
+
+    after = payload.get("after", "")
+    if _reindex_queued:
+        logger.info("Push %s to %s: re-index already queued", after[:8], repo_full_name)
+        return JSONResponse(status_code=202, content={"status": "accepted", "reindex": "already queued"})
+
+    _reindex_queued = True
+    logger.info("Push %s to %s: queued re-index", after[:8], repo_full_name)
+    background_tasks.add_task(reindex_repository, repo_full_name)
+    return JSONResponse(status_code=202, content={"status": "accepted", "reindex": "queued"})
+
+
 @app.post("/webhook")
 async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
     body = await request.body()
@@ -133,6 +217,9 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
     except ValueError:
         return JSONResponse(status_code=400, content={"status": "error", "message": "Invalid JSON"})
     logger.info("Received webhook payload")
+
+    if request.headers.get("X-GitHub-Event") == "push":
+        return _handle_push(payload, background_tasks)
 
     # Only process pull_request events
     action = payload.get("action")

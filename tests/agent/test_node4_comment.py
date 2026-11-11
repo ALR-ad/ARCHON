@@ -193,3 +193,61 @@ def test_render_summary_counts():
     assert "Found **2** issues" in result
     assert "1 duplicated logic" in result
     assert "1 architectural violation" in result
+
+
+# -- Tests: size limits -------------------------------------------------------
+
+def _big_candidate(i: int, lines: int = 400) -> Candidate:
+    return Candidate(
+        chunk_id=f"big_{i}",
+        file_path=f"src/big_{i}.ts",
+        symbol_name=f"big{i}",
+        code_snippet="\n".join(f"const line{n} = {n};" for n in range(lines)),
+        source_type="code",
+        similarity=0.9,
+    )
+
+
+def test_long_snippets_are_clipped_and_stay_indented():
+    from agent.nodes.node4_comment import MAX_SNIPPET_LINES
+
+    finding = _make_finding()
+    finding.candidates = [_big_candidate(0)]
+    result = render_comment([finding])
+    assert f"const line{MAX_SNIPPET_LINES - 1} = " in result
+    assert f"const line{MAX_SNIPPET_LINES} = " not in result
+    assert f"... ({400 - MAX_SNIPPET_LINES} more lines)" in result
+    # Every snippet line is indented so the code block stays inside the list item
+    assert "\n  const line1 = 1;" in result
+
+
+def test_extra_candidates_are_summarised():
+    from agent.nodes.node4_comment import MAX_CANDIDATES_SHOWN
+
+    finding = _make_finding()
+    finding.candidates = [_big_candidate(i, lines=2) for i in range(MAX_CANDIDATES_SHOWN + 2)]
+    result = render_comment([finding])
+    assert f"src/big_{MAX_CANDIDATES_SHOWN - 1}.ts" in result
+    assert f"src/big_{MAX_CANDIDATES_SHOWN}.ts" not in result
+    assert "...and 2 more" in result
+
+
+def test_comment_stays_under_github_limit_and_keeps_most_confident():
+    from agent.nodes.node4_comment import MAX_COMMENT_CHARS, MAX_FINDINGS
+
+    findings = []
+    for i in range(60):
+        f = _make_finding(file_path=f"src/file_{i}.ts", finding_id=f"finding_{i:03d}",
+                          confidence=0.99 if i == 59 else 0.80,
+                          suggested_replacement="x" * 3000)
+        findings.append(f)
+    result = render_comment(findings)
+
+    assert len(result) <= MAX_COMMENT_CHARS
+    assert "Found **60** issues" in result            # header counts everything
+    assert "src/file_59.ts" in result                 # highest confidence is shown
+    shown = result.count("### 📁")
+    assert 0 < shown <= MAX_FINDINGS
+    assert f"_{60 - shown} lower-confidence findings not shown" in result
+    assert BOT_COMMENT_MARKER in result
+    assert "finding_000" in result and "finding_059" in result   # all IDs kept in the footer

@@ -158,8 +158,12 @@ def pull_github_repo(
     target_dir.parent.mkdir(parents=True, exist_ok=True)
 
     if target_dir.exists() and (target_dir / ".git").exists():
-        logger.info(f"Pulling latest changes in existing repo at {target_dir}")
-        subprocess.run(["git", "-C", str(target_dir), "pull"], check=True, capture_output=True)
+        logger.info(f"Updating existing repo at {target_dir}")
+        # Fetch + hard reset rather than pull: this clone is a read-only cache,
+        # and a plain pull fails after a force-push to the branch.
+        git = ["git", "-C", str(target_dir)]
+        subprocess.run(git + ["fetch", "--depth", "1", "origin", branch or "HEAD"], check=True, capture_output=True)
+        subprocess.run(git + ["reset", "--hard", "FETCH_HEAD"], check=True, capture_output=True)
     else:
         logger.info(f"Cloning {repo} to {target_dir}")
         cmd = ["git", "clone", "--depth", "1"]

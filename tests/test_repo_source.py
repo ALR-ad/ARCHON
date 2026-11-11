@@ -113,7 +113,11 @@ def test_pull_github_repo_existing():
                 dest_dir=str(dest),
             )
             assert result_path == dest.resolve()
-            assert mock_run.call_count == 1
-            cmd = mock_run.call_args[0][0]
-            assert cmd == ["git", "-C", str(dest.resolve()), "pull"]
+            # Fetch + hard reset (not pull), so a force-pushed branch still updates
+            git = ["git", "-C", str(dest.resolve())]
+            cmds = [c[0][0] for c in mock_run.call_args_list]
+            assert cmds == [
+                git + ["fetch", "--depth", "1", "origin", "HEAD"],
+                git + ["reset", "--hard", "FETCH_HEAD"],
+            ]
 

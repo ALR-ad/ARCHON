@@ -127,3 +127,91 @@ def test_webhook_logs_payload(caplog):
     # Verify our log message appeared with the payload contents
     assert any("Received webhook payload" in record.message for record in caplog.records)
     assert any("42" in record.message for record in caplog.records)
+
+
+# -- Tests: push events re-index the default branch ---------------------------
+
+PUSH_PAYLOAD = {
+    "ref": "refs/heads/main",
+    "after": "abc1234def",
+    "repository": {"full_name": "test-org/test-repo", "default_branch": "main"},
+}
+
+
+@pytest.fixture
+def reindex_calls(monkeypatch):
+    """INDEX_REPO set, and reindex_repository replaced by a recorder."""
+    import agent.webhook.server as server
+
+    calls = []
+
+    async def fake_reindex(repo_full_name):
+        calls.append(repo_full_name)
+
+    monkeypatch.setenv("INDEX_REPO", "test-org/test-repo")
+    monkeypatch.setattr(server, "reindex_repository", fake_reindex)
+    monkeypatch.setattr(server, "_reindex_queued", False)
+    return calls
+
+
+def _push(payload):
+    return client.post("/webhook", json=payload, headers={"X-GitHub-Event": "push"})
+
+
+def test_push_to_default_branch_queues_reindex(reindex_calls):
+    response = _push(PUSH_PAYLOAD)
+    assert response.status_code == 202
+    assert response.json() == {"status": "accepted", "reindex": "queued"}
+    assert reindex_calls == ["test-org/test-repo"]
+
+
+def test_push_to_other_branch_is_ignored(reindex_calls):
+    response = _push({**PUSH_PAYLOAD, "ref": "refs/heads/feature-x"})
+    assert response.json()["status"] == "ignored"
+    assert reindex_calls == []
+
+
+def test_push_from_other_repo_is_ignored(reindex_calls):
+    payload = {**PUSH_PAYLOAD, "repository": {"full_name": "someone/else", "default_branch": "main"}}
+    assert _push(payload).json()["status"] == "ignored"
+    assert reindex_calls == []
+
+
+def test_push_ignored_when_index_repo_unset(reindex_calls, monkeypatch):
+    monkeypatch.delenv("INDEX_REPO")
+    assert _push(PUSH_PAYLOAD).json()["status"] == "ignored"
+    assert reindex_calls == []
+
+
+def test_second_push_while_queued_does_not_queue_again(reindex_calls):
+    # The recorder never clears the queued flag, as if the first run were still waiting
+    _push(PUSH_PAYLOAD)
+    response = _push(PUSH_PAYLOAD)
+    assert response.json() == {"status": "accepted", "reindex": "already queued"}
+    assert reindex_calls == ["test-org/test-repo"]
+
+
+def test_reindex_repository_runs_indexer_and_clears_queued_flag(monkeypatch):
+    import asyncio
+    import agent.webhook.server as server
+    from indexing.incremental import IndexingStats
+
+    seen = []
+    monkeypatch.setattr(server, "_run_incremental_index", lambda repo: seen.append(repo) or IndexingStats())
+    monkeypatch.setattr(server, "_reindex_queued", True)
+    asyncio.run(server.reindex_repository("test-org/test-repo"))
+    assert seen == ["test-org/test-repo"]
+    assert server._reindex_queued is False
+
+
+def test_reindex_failure_is_logged_not_raised(monkeypatch, caplog):
+    import asyncio
+    import agent.webhook.server as server
+
+    def boom(repo):
+        raise RuntimeError("clone failed")
+
+    monkeypatch.setattr(server, "_run_incremental_index", boom)
+    with caplog.at_level(logging.ERROR, logger="agent.webhook"):
+        asyncio.run(server.reindex_repository("test-org/test-repo"))
+    assert any("Re-index of test-org/test-repo failed" in r.message for r in caplog.records)

@@ -1,0 +1,65 @@
+# Archon + Qdrant + Ollama.
+#
+#   cp .env.example .env      # set GITHUB_TOKEN, GITHUB_WEBHOOK_SECRET, INDEX_REPO
+#   docker compose up -d
+#
+# First start downloads the two Ollama models (~5 GB) and indexes INDEX_REPO.
+# Point the GitHub webhook (events: Pull requests, Pushes) at http://<host>:8000/webhook.
+
+services:
+  archon:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file: .env
+    environment:
+      # These override .env: inside Compose the services reach each other by name
+      QDRANT_URL: http://qdrant:6333
+      OLLAMA_HOST: http://ollama:11434
+      # Index metadata, manifest and embedding cache (Qdrant itself holds the vectors)
+      QDRANT_PATH: /app/data/state
+    volumes:
+      - archon-data:/app/data
+      # Optional: your own review settings instead of the built-in defaults
+      # - ./.agent-review.yml:/app/.agent-review.yml:ro
+    depends_on:
+      qdrant:
+        condition: service_started
+      ollama-models:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant
+    volumes:
+      - qdrant-data:/qdrant/storage
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+    # Uncomment to use an NVIDIA GPU (needs the NVIDIA Container Toolkit):
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # One-shot: pulls the models Archon needs, then exits
+  ollama-models:
+    image: ollama/ollama
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["/bin/sh", "-c", "ollama pull nomic-embed-text && ollama pull qwen2.5-coder:7b"]
+    depends_on:
+      - ollama
+    restart: "no"
+
+volumes:
+  archon-data:
+  qdrant-data:
+  ollama-data:
