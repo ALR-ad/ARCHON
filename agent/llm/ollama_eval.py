@@ -14,12 +14,13 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
+from indexing.config import OLLAMA_HOST
 from shared.config import EVAL_MODEL
 from shared.schemas import Candidate, ChangedCodeUnit
 
 logger = logging.getLogger("agent.llm.ollama_eval")
 
-OLLAMA_GENERATE_URL = "http://localhost:11434/api/generate"
+OLLAMA_GENERATE_URL = f"{OLLAMA_HOST.rstrip('/')}/api/generate"
 
 # Shared session keeps the connection alive between calls (a fresh connection to
 # "localhost" on Windows tries IPv6 first and adds ~2s per call).

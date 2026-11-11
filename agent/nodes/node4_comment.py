@@ -21,6 +21,22 @@ logger = logging.getLogger("agent.nodes.node4")
 # Marker used to identify bot comments for idempotent updates
 BOT_COMMENT_MARKER = "<!-- pr-reviewer-agent-findings -->"
 
+# GitHub rejects comment bodies over 65,536 characters. Stay well under it:
+# show the highest-confidence findings and trim long snippets.
+MAX_COMMENT_CHARS = 60000
+MAX_FINDINGS = 20
+MAX_CANDIDATES_SHOWN = 3
+MAX_SNIPPET_LINES = 25
+
+
+def _clip_snippet(code: str, max_lines: int = MAX_SNIPPET_LINES) -> List[str]:
+    """Split a snippet into lines, cutting it off after max_lines."""
+    lines = code.splitlines() or [""]
+    if len(lines) > max_lines:
+        hidden = len(lines) - max_lines
+        lines = lines[:max_lines] + [f"... ({hidden} more line{'s' if hidden != 1 else ''})"]
+    return lines
+
 
 def _render_finding(finding: Finding) -> str:
     """Render a single Finding into a markdown block."""
@@ -54,15 +70,19 @@ def _render_finding(finding: Finding) -> str:
         parts.append("<details>")
         parts.append(f"<summary>Similar existing code ({len(finding.candidates)} match{'es' if len(finding.candidates) != 1 else ''})</summary>")
         parts.append("")
-        for c in finding.candidates:
+        for c in finding.candidates[:MAX_CANDIDATES_SHOWN]:
             source_label = "📖 wiki" if c.source_type == "wiki" else "📄 code"
             parts.append(
                 f"- `{c.file_path}::{c.symbol_name}` "
                 f"({source_label}, similarity: {c.similarity:.0%})"
             )
             parts.append(f"  ```{finding.unit.language}")
-            parts.append(f"  {c.code_snippet}")
+            # Indent every line so the block stays inside the list item
+            parts.extend(f"  {line}" for line in _clip_snippet(c.code_snippet))
             parts.append("  ```")
+        hidden = len(finding.candidates) - MAX_CANDIDATES_SHOWN
+        if hidden > 0:
+            parts.append(f"- ...and {hidden} more")
         parts.append("")
         parts.append("</details>")
         parts.append("")
@@ -94,15 +114,33 @@ def render_comment(findings: List[Finding]) -> str:
         logger.info("Node 4: no findings to render")
         return ""
 
+    # Hidden HTML comment with finding IDs for idempotent updates
+    finding_ids = [f.finding_id for f in findings]
+    footer = [BOT_COMMENT_MARKER, f"<!-- finding_ids: {','.join(finding_ids)} -->"]
+
+    # Render most-confident first until the count or size budget is used up
+    budget = MAX_COMMENT_CHARS - sum(len(line) + 1 for line in footer) - 1000  # header and notes
+    rendered: Dict[str, str] = {}
+    shown: List[Finding] = []
+    for f in sorted(findings, key=lambda f: f.confidence, reverse=True)[:MAX_FINDINGS]:
+        block = _render_finding(f)
+        if len(block) + 8 > budget:
+            break
+        rendered[f.finding_id] = block
+        shown.append(f)
+        budget -= len(block) + 8
+
+    # Header counts cover everything found, even if not all of it is shown
+    total = len(findings)
+    omitted = total - len(shown)
+
     # Group findings by file path
     by_file: Dict[str, List[Finding]] = defaultdict(list)
-    for f in findings:
+    for f in shown:
         by_file[f.unit.file_path].append(f)
 
     sections: List[str] = []
 
-    # Header
-    total = len(findings)
     dup_count = sum(1 for f in findings if f.is_duplicate)
     arch_count = sum(1 for f in findings if f.is_architectural_violation)
 
@@ -123,14 +161,18 @@ def render_comment(findings: List[Finding]) -> str:
         sections.append("")
 
         for finding in file_findings:
-            sections.append(_render_finding(finding))
+            sections.append(rendered[finding.finding_id])
             sections.append("---")
             sections.append("")
 
-    # Hidden HTML comment with finding IDs for idempotent updates
-    finding_ids = [f.finding_id for f in findings]
-    sections.append(BOT_COMMENT_MARKER)
-    sections.append(f"<!-- finding_ids: {','.join(finding_ids)} -->")
+    if omitted:
+        sections.append(
+            f"_{omitted} lower-confidence finding{'s' if omitted != 1 else ''} not shown "
+            f"to keep this comment within GitHub's size limit._"
+        )
+        sections.append("")
+
+    sections.extend(footer)
 
     result = "\n".join(sections)
     logger.info(

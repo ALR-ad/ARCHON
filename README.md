@@ -87,7 +87,34 @@ implementation is ready to swap in.
 - Real vector store and embeddings — done (Qdrant integrated)
 - Live GitHub App / real webhook — wired and ready for production
 
-## Setup
+## Setup with Docker
+
+Runs Archon, Qdrant and Ollama together:
+
+```bash
+cp .env.example .env    # set GITHUB_TOKEN, GITHUB_WEBHOOK_SECRET and INDEX_REPO=owner/name
+docker compose up -d
+```
+
+The first start downloads the two Ollama models (about 5 GB) and indexes
+`INDEX_REPO`. Then add a webhook on that repository pointing at
+`http://<host>:8000/webhook`, with the same secret and the **Pull requests**
+and **Pushes** events.
+
+## Keeping the index fresh
+
+With `INDEX_REPO` set, the server keeps its own clone of that repository
+(under `data/repos/`) and:
+
+- builds the index on startup if it is empty
+- re-indexes incrementally on every push to the default branch
+
+Reviews and re-indexing run one at a time, so a review never sees a
+half-updated index. Without `INDEX_REPO`, run `python -m indexing.run_index`
+yourself. Set `QDRANT_URL` to use a Qdrant server instead of the on-disk
+store; `QDRANT_PATH` then only holds index metadata.
+
+## Manual setup
 
 ```bash
 git clone <this-repo-url>

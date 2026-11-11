@@ -154,7 +154,6 @@ class IncrementalIndexer:
         manifest = self._load_manifest()
         prev_files: Dict[str, str] = {} if force_full else manifest.get("files", {})
         last_sha = "" if force_full else manifest.get("last_sha", "")
-        current_sha = self.get_git_head_sha() or ""
 
         # Step 1: Discover all current files (code + docs)
         repo_source = RepoSource(
@@ -166,6 +165,8 @@ class IncrementalIndexer:
         }
         self.repo_root = repo_source.repo_root
         effective_root = str(repo_source.repo_root)
+        # After RepoSource: with github_repo the clone only exists from here on
+        current_sha = self.get_git_head_sha() or ""
 
         wiki_source = WikiSource(
             repo_root=effective_root,
