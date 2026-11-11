@@ -14,3 +14,7 @@ enabled_checks:
 # review_ignore_paths:
 #   - "tests/**"
 #   - "**/migrations/**"
+# How many wiki rules each changed function is checked against (0 turns the
+# rule lookup off). Rules come from docs/, wiki/, ARCHITECTURE.md, CONTRIBUTING.md
+# and similar files in the indexed repository.
+# wiki_top_k: 4

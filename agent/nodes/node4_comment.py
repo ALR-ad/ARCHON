@@ -68,10 +68,18 @@ def _render_finding(finding: Finding) -> str:
     # Similar code references
     if finding.candidates:
         parts.append("<details>")
-        parts.append(f"<summary>Similar existing code ({len(finding.candidates)} match{'es' if len(finding.candidates) != 1 else ''})</summary>")
+        if all(c.source_type == "wiki" for c in finding.candidates):
+            parts.append("<summary>Rule this breaks</summary>")
+        else:
+            parts.append(f"<summary>Similar existing code ({len(finding.candidates)} match{'es' if len(finding.candidates) != 1 else ''})</summary>")
         parts.append("")
         for c in finding.candidates[:MAX_CANDIDATES_SHOWN]:
-            source_label = "📖 wiki" if c.source_type == "wiki" else "📄 code"
+            if c.source_type == "wiki":
+                # A rule is prose: quote it, and leave out the similarity score
+                parts.append(f"- `{c.file_path}` (📖 wiki rule)")
+                parts.extend(f"  > {line}" for line in _clip_snippet(c.code_snippet))
+                continue
+            source_label = "📄 code"
             parts.append(
                 f"- `{c.file_path}::{c.symbol_name}` "
                 f"({source_label}, similarity: {c.similarity:.0%})"

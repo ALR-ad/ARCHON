@@ -31,7 +31,7 @@ from agent.nodes.node1_ingest_diff import _extract_pr_metadata
 from indexing.vectorstore.store import QdrantVectorStore
 from indexing.embeddings.embedder import embed_text
 from indexing.incremental import IncrementalIndexer
-from agent.llm.ollama_eval import evaluate_with_ollama
+from agent.llm.ollama_eval import confirm_violation_with_ollama, evaluate_with_ollama
 from indexing.config import QDRANT_PATH, QDRANT_URL, load_agent_review_config
 from shared.config import CONFIDENCE_THRESHOLD, SIMILARITY_FLOOR
 
@@ -67,10 +67,12 @@ async def lifespan(app: FastAPI):
         store=vector_store,
         embed_fn=embed_text,
         eval_fn=evaluate_with_ollama,
+        confirm_fn=confirm_violation_with_ollama,
         similarity_floor=float(review_cfg.get("similarity_floor", SIMILARITY_FLOOR)),
         confidence_threshold=float(review_cfg.get("confidence_threshold", CONFIDENCE_THRESHOLD)),
         enabled_checks=review_cfg.get("enabled_checks"),
         review_ignore_paths=review_cfg.get("review_ignore_paths"),
+        wiki_top_k=review_cfg.get("wiki_top_k"),
     )
     logger.info("DAG built successfully.")
 

@@ -23,6 +23,7 @@ from indexing.ingest.repo_source import RepoSource, SourceFile
 from indexing.ingest.wiki_source import WikiDocument, WikiSource
 from indexing.vectorstore.store import QdrantVectorStore
 from indexing.config import QDRANT_PATH
+from shared.config import WIKI_DOCUMENT_PREFIX, WIKI_EMBEDDING_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -248,6 +249,12 @@ class IncrementalIndexer:
                 else:
                     unchanged.add(curr_p)
 
+        # Wiki chunks embedded the old way are not comparable; re-embed them
+        if manifest.get("wiki_embedding_version") != WIKI_EMBEDDING_VERSION:
+            stale_wiki = unchanged & set(current_wiki_docs.keys())
+            unchanged -= stale_wiki
+            modified |= stale_wiki
+
         stats.added_files = len(added)
         stats.modified_files = len(modified)
         stats.deleted_files = len(deleted)
@@ -303,7 +310,7 @@ class IncrementalIndexer:
                 wd = current_wiki_docs[path]
                 w_chunks = chunk_wiki(content=wd.content, file_path=wd.file_path)
                 for wc in w_chunks:
-                    vec = self.embed_fn(wc.code_snippet)
+                    vec = self.embed_fn(WIKI_DOCUMENT_PREFIX + wc.code_snippet)
                     chunks_to_upsert.append({
                         "chunk_id": wc.chunk_id,
                         "file_path": wc.file_path,
@@ -326,6 +333,7 @@ class IncrementalIndexer:
         new_manifest = {
             "files": current_file_hashes,
             "last_sha": current_sha,
+            "wiki_embedding_version": WIKI_EMBEDDING_VERSION,
         }
         self._save_manifest(new_manifest)
         if current_sha:
