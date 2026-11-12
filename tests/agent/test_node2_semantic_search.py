@@ -277,3 +277,64 @@ def test_match_much_closer_than_base_version_is_kept():
     embed = lambda text: [1.0] if text == "NEW" else [0.0]
     results = semantic_search([unit], store, embed_fn=embed, base_code={unit.unit_id: "OLD"})
     assert [c.chunk_id for c in results[0][1]] == ["grew"]
+
+
+# -- Tests: wiki rules are looked up separately -------------------------------
+
+class TwoLookupStore(VectorStore):
+    """Honours the source_type filter and records every query."""
+    def __init__(self, code, wiki):
+        self.code, self.wiki, self.calls = code, wiki, []
+    def query(self, embedding, top_k=8, filters=None):
+        self.calls.append((top_k, filters))
+        wanted = (filters or {}).get("source_type")
+        return (self.wiki if wanted == "wiki" else self.code)[:top_k]
+    def get_index_status(self):
+        return {}
+
+
+def _rule(i, similarity=0.55):
+    return _cand(f"rule_{i}", "docs/ARCHITECTURE.md", "", code=f"[Rules] rule {i}",
+                 similarity=similarity, source_type="wiki")
+
+
+def test_rules_attached_even_below_similarity_floor():
+    """Rules never score high against code, so the floor must not apply to them."""
+    store = TwoLookupStore(code=[], wiki=[_rule(1, 0.55), _rule(2, 0.50)])
+    results = semantic_search([_make_unit()], store)
+    assert [c.chunk_id for c in results[0][1]] == ["rule_1", "rule_2"]
+
+
+def test_rules_and_code_matches_are_combined_code_first():
+    store = TwoLookupStore(code=[_cand("dup", "src/utils.ts", "utilFn")], wiki=[_rule(1)])
+    results = semantic_search([_make_unit()], store)
+    assert [c.source_type for c in results[0][1]] == ["code", "wiki"]
+
+
+def test_rule_lookup_uses_wiki_filter_top_k_and_query_prefix():
+    from shared.config import WIKI_QUERY_PREFIX
+
+    embedded = []
+    def embed(text):
+        embedded.append(text)
+        return [0.1] * 4
+
+    store = TwoLookupStore(code=[], wiki=[_rule(i) for i in range(10)])
+    unit = _make_unit(code="function testFn() {}")
+    results = semantic_search([unit], store, embed_fn=embed, wiki_top_k=3)
+    assert len(results[0][1]) == 3
+    assert (3, {"source_type": "wiki"}) in store.calls
+    assert WIKI_QUERY_PREFIX + unit.code in embedded and unit.code in embedded
+
+
+def test_wiki_top_k_zero_disables_rule_lookup():
+    store = TwoLookupStore(code=[], wiki=[_rule(1)])
+    assert semantic_search([_make_unit()], store, wiki_top_k=0) == []
+    assert all((f or {}).get("source_type") != "wiki" for _, f in store.calls)
+
+
+def test_non_code_files_get_no_rules():
+    unit = _make_unit()
+    unit.language = "md"
+    store = TwoLookupStore(code=[], wiki=[_rule(1)])
+    assert semantic_search([unit], store) == []

@@ -27,19 +27,28 @@ OLLAMA_GENERATE_URL = f"{OLLAMA_HOST.rstrip('/')}/api/generate"
 _session = requests.Session()
 
 _SYSTEM_PROMPT = """\
-You are a code review assistant that detects duplicated logic and \
-architectural convention violations. You will be given a NEW code unit \
-from a pull request and one or more EXISTING code snippets from the \
-codebase (or wiki style-guide rules) that are semantically similar.
+You are a code review assistant. You will be given a NEW code unit from a \
+pull request and a numbered list of EXISTING candidates. Each candidate is \
+either a CODEBASE snippet or a WIKI RULE. Answer two separate questions.
 
-Your job:
-1. Determine if the new code is duplicating logic already present in \
-   the existing snippets (is_duplicate).
-2. Determine if the new code violates an architectural convention \
-   described in a wiki/style-guide snippet (is_architectural_violation).
-3. Assign a confidence score (0.0 to 1.0).
-4. Provide concise reasoning (max 2 sentences).
-5. If applicable, provide a suggested_replacement code snippet.
+1. is_duplicate -- judged ONLY against CODEBASE candidates.
+   True only if the new code re-implements the same logic as a CODEBASE \
+snippet, so it could call or reuse that snippet instead. Similar structure, \
+shared boilerplate, or the same topic is NOT duplication. If there are no \
+CODEBASE candidates, is_duplicate must be false.
+
+2. is_architectural_violation -- judged ONLY against WIKI RULE candidates.
+   True only if a WIKI RULE states a requirement or a prohibition AND the \
+new code itself clearly does what the rule forbids, or clearly fails to do \
+what it requires. It is NOT a violation if the rule is about something the \
+code does not do, if the code complies with the rule, or if the rule merely \
+describes the project. Most code breaks no rule: when in doubt, answer false. \
+If true, set violated_rule to the number of that WIKI RULE; otherwise null. \
+If there are no WIKI RULE candidates, is_architectural_violation must be false.
+
+Also give a confidence score (0.0 to 1.0), concise reasoning (max 2 \
+sentences) naming the snippet or rule you relied on, and, if applicable, a \
+suggested_replacement code snippet.
 
 Respond with ONLY a valid JSON object, no markdown fencing, no extra text.
 """
@@ -54,13 +63,14 @@ NEW CODE UNIT (from the PR):
 {code}
 ```
 
-EXISTING CANDIDATES (semantically similar snippets from the codebase/wiki):
+EXISTING CANDIDATES (CODEBASE snippets and WIKI RULES):
 {candidates_text}
 
 Respond with ONLY this JSON structure:
 {{
   "is_duplicate": true/false,
   "is_architectural_violation": true/false,
+  "violated_rule": number of the broken WIKI RULE or null,
   "confidence": 0.0-1.0,
   "reasoning": "max 2 sentences",
   "suggested_replacement": "replacement code or null"
@@ -72,9 +82,12 @@ def _format_candidates(candidates: List[Candidate]) -> str:
     """Format candidates into a readable text block for the prompt."""
     parts = []
     for i, c in enumerate(candidates, 1):
-        source_label = "WIKI RULE" if c.source_type == "wiki" else "CODEBASE"
+        if c.source_type == "wiki":
+            # No similarity score for rules: it says nothing about whether one is broken
+            parts.append(f"  [{i}] (WIKI RULE) {c.file_path}\n  {c.code_snippet}")
+            continue
         parts.append(
-            f"  [{i}] ({source_label}) {c.file_path}::{c.symbol_name} "
+            f"  [{i}] (CODEBASE) {c.file_path}::{c.symbol_name} "
             f"(similarity={c.similarity:.2f})\n"
             f"  ```\n  {c.code_snippet}\n  ```"
         )
@@ -185,6 +198,102 @@ def evaluate_with_ollama(
         return None
 
     return parsed
+
+
+# ---------------------------------------------------------------------------
+# Second opinion on rule violations
+# ---------------------------------------------------------------------------
+
+_CONFIRM_SYSTEM_PROMPT = """\
+You check one piece of code against one written rule and decide whether the \
+code breaks it.
+
+First work out exactly what the rule forbids or requires. Then look for that \
+exact thing in the code. Code that uses the approved mechanism the rule names \
+(for example, it calls the repository, wrapper or helper the rule tells it to \
+use) complies with the rule. Code that has nothing to do with the rule also \
+complies.
+
+Respond with ONLY a valid JSON object:
+{
+  "offending_code": "the exact line from the code that breaks the rule, copied character for character, or an empty string if no line does",
+  "violates": true/false,
+  "reasoning": "max 2 sentences"
+}
+"""
+
+_CONFIRM_PROMPT_TEMPLATE = """\
+RULE:
+{rule}
+
+CODE ({language}, {file_path}):
+```
+{code}
+```
+"""
+
+
+def _squash(text: str) -> str:
+    """Drop whitespace and unify quote characters, so a line the model re-typed still matches."""
+    return "".join(text.split()).replace("'", '"')
+
+
+def _quote_appears_in(quote: str, code: str) -> bool:
+    """True if at least one quoted line (4+ characters) really occurs in the code."""
+    haystack = _squash(code)
+    lines = [_squash(line) for line in quote.splitlines()]
+    return any(len(line) >= 4 and line in haystack for line in lines)
+
+
+def confirm_violation_with_ollama(
+    unit: ChangedCodeUnit,
+    rule: Candidate,
+    model: str = EVAL_MODEL,
+    ollama_url: str = OLLAMA_GENERATE_URL,
+    timeout: int = 120,
+) -> bool:
+    """
+    Re-check a flagged rule violation with a narrower question: this one rule,
+    this one unit, and the model must quote the offending line. The violation
+    stands only if it says yes and the quote really appears in the code.
+
+    Returns False if the call fails, so an unverified violation is not reported.
+    """
+    try:
+        response = _session.post(
+            ollama_url,
+            json={
+                "model": model,
+                "system": _CONFIRM_SYSTEM_PROMPT,
+                "prompt": _CONFIRM_PROMPT_TEMPLATE.format(
+                    rule=rule.code_snippet,
+                    language=unit.language,
+                    file_path=unit.file_path,
+                    code=unit.code,
+                ),
+                "stream": False,
+                "format": "json",
+                "options": {"temperature": 0.0, "seed": 42, "num_predict": 256},
+            },
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        parsed = _parse_llm_response(response.json().get("response", ""))
+    except (requests.RequestException, json.JSONDecodeError, ValueError) as e:
+        logger.error("Violation check failed for %s::%s: %s", unit.file_path, unit.symbol_name, e)
+        return False
+
+    confirmed = bool(parsed.get("violates")) and _quote_appears_in(
+        str(parsed.get("offending_code") or ""), unit.code
+    )
+    logger.info(
+        "Violation check for %s::%s: %s (%s)",
+        unit.file_path,
+        unit.symbol_name,
+        "confirmed" if confirmed else "rejected",
+        str(parsed.get("reasoning", ""))[:160],
+    )
+    return confirmed
 
 
 # ---------------------------------------------------------------------------

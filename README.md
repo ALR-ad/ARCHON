@@ -143,6 +143,7 @@ and indexes that repository itself.
 | `confidence_threshold` | `0.75` | Minimum LLM confidence for a finding to be reported. |
 | `enabled_checks` | both `true` | Turn `duplication` or `architectural_violation` off. |
 | `review_ignore_paths` | test files | Files the review skips, both as changed code and as matches. Set `[]` to review tests too. |
+| `wiki_top_k` | `4` | How many wiki rules each changed function is checked against. `0` turns the rule lookup off. |
 | `ignore_paths` | lock files, `node_modules`, `dist` | Files the indexer skips. |
 
 Restart the server after editing it.
@@ -168,8 +169,34 @@ python -m indexing.run_index --status                 # chunk count and last ind
 ```
 
 Add `--wiki-path <dir>` for a folder of markdown docs, or
-`--confluence-path <dir-or-zip>` for a Confluence export. Their rules are what
-the architectural check compares code against.
+`--confluence-path <dir-or-zip>` for a Confluence export.
+
+## Architectural rules
+
+Rules are plain markdown. The indexer picks them up from `docs/`, `wiki/` and
+files such as `ARCHITECTURE.md`, `CONTRIBUTING.md` or `STYLEGUIDE.md` in the
+indexed repository, and splits them into one rule per bullet or paragraph:
+
+```markdown
+## HTTP calls
+
+- All outbound HTTP requests must use the shared `http_client` wrapper.
+  Do not call `requests` or `httpx` directly.
+```
+
+Prose and code never score high against each other, so rules aren't filtered
+by similarity. For each changed function Archon takes the `wiki_top_k` closest
+rules and asks the LLM whether one is broken. A violation is only reported if:
+
+1. the LLM names the rule it breaks, and
+2. a second, narrower check of that one rule against that one function agrees
+   and quotes the offending line, and the quote really is in the code.
+
+Write rules as clear requirements or prohibitions ("must", "never", "do not").
+Descriptive text is ignored. With no rule documents in the repository, this
+check costs nothing.
+
+After upgrading, the next index run re-embeds existing wiki chunks once.
 
 ## Keeping the review quiet
 
@@ -191,8 +218,9 @@ The comment itself is capped: the 20 most confident findings, 3 matches each,
 
 - **One repository per server.** The index and `.agent-review.yml` are not
   per-repository yet.
-- **Architectural checks are weak.** Wiki rules compete with code for the same
-  search results and rarely score high enough, so this check under-reports.
+- **Rule checks are new and lightly tested.** They were tuned on seven sample
+  rules. A touched function is checked as a whole, so a rule it already broke
+  before the PR is reported too.
 - **Confidence isn't calibrated.** The model rates most findings 90–95%, so
   `confidence_threshold` filters little. `similarity_floor` does the real work.
 - **One comment per PR.** Findings aren't posted as inline review comments, so

@@ -71,9 +71,12 @@ def _run_node2(
     embed_fn: Optional[Callable] = None,
     similarity_floor: Optional[float] = None,
     ignore_paths: Optional[List[str]] = None,
+    wiki_top_k: Optional[int] = None,
 ) -> None:
     units = state.get("units", [])
     kwargs: Dict[str, Any] = {"ignore_paths": ignore_paths, "base_code": state.get("base_code")}
+    if wiki_top_k is not None:
+        kwargs["wiki_top_k"] = wiki_top_k
     if embed_fn:
         kwargs["embed_fn"] = embed_fn
     if similarity_floor is not None:
@@ -86,9 +89,12 @@ def _run_node3(
     eval_fn: Optional[Callable] = None,
     confidence_threshold: Optional[float] = None,
     enabled_checks: Optional[Dict[str, bool]] = None,
+    confirm_fn: Optional[Callable] = None,
 ) -> None:
     matches = state.get("matches", [])
     kwargs: Dict[str, Any] = {}
+    if confirm_fn:
+        kwargs["confirm_fn"] = confirm_fn
     if eval_fn:
         kwargs["eval_fn"] = eval_fn
     if confidence_threshold is not None:
@@ -113,6 +119,8 @@ def build_dag(
     confidence_threshold: Optional[float] = None,
     enabled_checks: Optional[Dict[str, bool]] = None,
     review_ignore_paths: Optional[List[str]] = None,
+    wiki_top_k: Optional[int] = None,
+    confirm_fn: Optional[Callable] = None,
 ) -> Graph:
     """
     Constructs the 4-node sequential DAG using Strands GraphBuilder.
@@ -134,12 +142,15 @@ def build_dag(
         embed_fn=embed_fn,
         similarity_floor=similarity_floor,
         ignore_paths=review_ignore_paths,
+        # No point fetching rules if the architectural check is off
+        wiki_top_k=0 if (enabled_checks or {}).get("architectural_violation", True) is False else wiki_top_k,
     )
     node3_bound = functools.partial(
         _run_node3,
         eval_fn=eval_fn,
         confidence_threshold=confidence_threshold,
         enabled_checks=enabled_checks,
+        confirm_fn=confirm_fn,
     )
 
     # Add nodes

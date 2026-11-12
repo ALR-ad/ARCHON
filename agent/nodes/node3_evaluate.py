@@ -24,11 +24,33 @@ def _make_finding_id(unit_id: str, chunk_ids: List[str]) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
+def _cited_rule(
+    violated_rule: Any,
+    candidates: List[Candidate],
+    rule_candidates: List[Candidate],
+) -> Optional[Candidate]:
+    """
+    Resolve the model's violated_rule (1-based number in the candidate list)
+    to a wiki candidate. Returns None if it doesn't point at a wiki rule,
+    unless there is only one rule it could have meant.
+    """
+    try:
+        index = int(violated_rule)
+    except (TypeError, ValueError):
+        index = 0
+    if 1 <= index <= len(candidates) and candidates[index - 1].source_type == "wiki":
+        return candidates[index - 1]
+    if len(rule_candidates) == 1:
+        return rule_candidates[0]
+    return None
+
+
 def evaluate(
     matches: List[Tuple[ChangedCodeUnit, List[Candidate]]],
     eval_fn: Optional[Callable[[ChangedCodeUnit, List[Candidate]], Optional[Dict[str, Any]]]] = None,
     confidence_threshold: float = CONFIDENCE_THRESHOLD,
     enabled_checks: Optional[Dict[str, bool]] = None,
+    confirm_fn: Optional[Callable[[ChangedCodeUnit, Candidate], bool]] = None,
 ) -> List[Finding]:
     """
     Node 3 entry point.
@@ -45,6 +67,9 @@ def evaluate(
         enabled_checks: From .agent-review.yml, e.g.
                  {"duplication": True, "architectural_violation": False}.
                  A disabled check is never reported. None enables both.
+        confirm_fn: Optional second opinion on a rule violation, called with
+                 the unit and the cited rule. The violation is dropped
+                 unless it returns True. None skips the second check.
 
     Returns:
         List[Finding] with only high-confidence results.
@@ -76,8 +101,29 @@ def evaluate(
             continue
 
         confidence = float(result.get("confidence", 0.0))
-        is_dup = check_duplication and bool(result.get("is_duplicate", False))
-        is_arch = check_architecture and bool(result.get("is_architectural_violation", False))
+        code_candidates = [c for c in candidates if c.source_type == "code"]
+        rule_candidates = [c for c in candidates if c.source_type == "wiki"]
+
+        # Duplication only counts against existing code
+        is_dup = check_duplication and bool(result.get("is_duplicate", False)) and bool(code_candidates)
+
+        # A violation only counts if the model names the wiki rule it breaks
+        broken_rule = _cited_rule(result.get("violated_rule"), candidates, rule_candidates)
+        is_arch = (
+            check_architecture
+            and bool(result.get("is_architectural_violation", False))
+            and broken_rule is not None
+        )
+
+        # Second opinion, only for violations that would otherwise be reported
+        if is_arch and confidence >= confidence_threshold and confirm_fn is not None:
+            if not confirm_fn(unit, broken_rule):
+                logger.info(
+                    "Node 3: %s::%s - rule violation not confirmed, dropping it",
+                    unit.file_path,
+                    unit.symbol_name,
+                )
+                is_arch = False
 
         # Skip if neither duplicate nor architectural violation
         if not is_dup and not is_arch:
@@ -99,10 +145,13 @@ def evaluate(
             )
             continue
 
+        # Show only what the finding rests on: the matched code and/or the broken rule
+        evidence = (code_candidates if is_dup else []) + ([broken_rule] if is_arch else [])
+
         finding = Finding(
-            finding_id=_make_finding_id(unit.unit_id, [c.chunk_id for c in candidates]),
+            finding_id=_make_finding_id(unit.unit_id, [c.chunk_id for c in evidence]),
             unit=unit,
-            candidates=candidates,
+            candidates=evidence,
             is_duplicate=is_dup,
             is_architectural_violation=is_arch,
             confidence=confidence,

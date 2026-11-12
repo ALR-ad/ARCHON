@@ -241,15 +241,136 @@ def test_evaluate_keeps_enabled_check_when_other_disabled():
         return {
             "is_duplicate": True,
             "is_architectural_violation": True,
+            "violated_rule": 2,
             "confidence": 0.9,
             "reasoning": "Both.",
         }
 
     findings = evaluate(
-        [(_make_unit(), [_make_candidate()])],
+        [(_make_unit(), [_make_candidate(), _make_rule()])],
         eval_fn=both_issues,
         enabled_checks={"duplication": False},
     )
     assert len(findings) == 1
     assert findings[0].is_duplicate is False
     assert findings[0].is_architectural_violation is True
+
+
+# -- Tests: architectural violations need a cited wiki rule -------------------
+
+def _make_rule(chunk_id: str = "rule_001", text: str = "[Data access] Never run raw SQL in handlers.") -> Candidate:
+    return Candidate(
+        chunk_id=chunk_id,
+        file_path="docs/ARCHITECTURE.md",
+        symbol_name="",
+        code_snippet=text,
+        source_type="wiki",
+        similarity=0.6,
+    )
+
+
+def _verdict(**overrides):
+    result = {
+        "is_duplicate": False,
+        "is_architectural_violation": True,
+        "violated_rule": None,
+        "confidence": 0.9,
+        "reasoning": "Breaks the rule.",
+    }
+    result.update(overrides)
+    return lambda unit, candidates: result
+
+
+def test_violation_reports_only_the_cited_rule():
+    rules = [_make_rule("rule_a"), _make_rule("rule_b", "[HTTP] Use the shared client.")]
+    candidates = [_make_candidate()] + rules
+    findings = evaluate([(_make_unit(), candidates)], eval_fn=_verdict(violated_rule=3))
+    assert len(findings) == 1
+    assert findings[0].is_architectural_violation is True
+    assert findings[0].is_duplicate is False
+    assert [c.chunk_id for c in findings[0].candidates] == ["rule_b"]
+
+
+def test_violation_without_any_rule_candidate_is_dropped():
+    """The model can't claim a violation when no wiki rule was shown to it."""
+    findings = evaluate([(_make_unit(), [_make_candidate()])], eval_fn=_verdict(violated_rule=1))
+    assert findings == []
+
+
+def test_violation_citing_a_code_candidate_is_dropped_when_rules_are_ambiguous():
+    candidates = [_make_candidate(), _make_rule("rule_a"), _make_rule("rule_b")]
+    findings = evaluate([(_make_unit(), candidates)], eval_fn=_verdict(violated_rule=1))
+    assert findings == []
+
+
+def test_violation_with_missing_citation_uses_the_only_rule():
+    candidates = [_make_candidate(), _make_rule("rule_a")]
+    findings = evaluate([(_make_unit(), candidates)], eval_fn=_verdict(violated_rule=None))
+    assert [c.chunk_id for c in findings[0].candidates] == ["rule_a"]
+
+
+def test_duplicate_claim_with_only_rules_is_dropped():
+    """Duplication is judged against code only; rules can't be 'duplicated'."""
+    findings = evaluate(
+        [(_make_unit(), [_make_rule()])],
+        eval_fn=_verdict(is_duplicate=True, is_architectural_violation=False),
+    )
+    assert findings == []
+
+
+def test_duplicate_and_violation_keep_code_and_rule():
+    candidates = [_make_candidate(), _make_rule("rule_a")]
+    findings = evaluate([(_make_unit(), candidates)], eval_fn=_verdict(is_duplicate=True, violated_rule=2))
+    assert [c.source_type for c in findings[0].candidates] == ["code", "wiki"]
+
+
+# -- Tests: second opinion on rule violations ---------------------------------
+
+def test_unconfirmed_violation_is_dropped():
+    candidates = [_make_rule("rule_a")]
+    findings = evaluate([(_make_unit(), candidates)], eval_fn=_verdict(violated_rule=1),
+                        confirm_fn=lambda unit, rule: False)
+    assert findings == []
+
+
+def test_confirmed_violation_is_kept_and_checked_against_the_cited_rule():
+    seen = []
+    def confirm(unit, rule):
+        seen.append(rule.chunk_id)
+        return True
+
+    candidates = [_make_rule("rule_a"), _make_rule("rule_b")]
+    findings = evaluate([(_make_unit(), candidates)], eval_fn=_verdict(violated_rule=2), confirm_fn=confirm)
+    assert len(findings) == 1
+    assert seen == ["rule_b"]
+
+
+def test_unconfirmed_violation_keeps_a_real_duplicate():
+    candidates = [_make_candidate(), _make_rule("rule_a")]
+    findings = evaluate([(_make_unit(), candidates)],
+                        eval_fn=_verdict(is_duplicate=True, violated_rule=2),
+                        confirm_fn=lambda unit, rule: False)
+    assert len(findings) == 1
+    assert findings[0].is_duplicate is True
+    assert findings[0].is_architectural_violation is False
+    assert [c.source_type for c in findings[0].candidates] == ["code"]
+
+
+def test_confirm_not_called_for_duplicates_or_low_confidence():
+    def must_not_run(unit, rule):
+        raise AssertionError("confirm_fn should not be called")
+
+    evaluate([(_make_unit(), [_make_candidate()])], eval_fn=fake_evaluate, confirm_fn=must_not_run)
+    evaluate([(_make_unit(), [_make_rule()])], eval_fn=_verdict(violated_rule=1, confidence=0.2),
+             confirm_fn=must_not_run)
+
+
+def test_quote_must_really_appear_in_the_code():
+    from agent.llm.ollama_eval import _quote_appears_in
+
+    code = 'def f(currency):\n    resp = requests.get(f"https://x/{currency}")\n    return resp.json()'
+    assert _quote_appears_in("requests.get(f'https://x/{currency}')", code)      # quote style changed
+    assert _quote_appears_in("  resp   =  requests.get(", code)                  # re-spaced fragment
+    assert _quote_appears_in("made_up_call()\nreturn resp.json()", code)         # one of two lines is real
+    assert not _quote_appears_in("conn.execute(sql)", code)                      # invented
+    assert not _quote_appears_in("", code)
